@@ -1,0 +1,70 @@
+name: build-gfxstream-icd
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_ref:
+        description: Mesa git ref/commit to build
+        required: false
+        default: ec586407f5
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git ca-certificates ninja-build meson pkg-config \
+            python3-mako python3-yaml python3-packaging python3-setuptools \
+            bison flex zlib1g-dev libdrm-dev libzstd-dev libexpat1-dev
+          meson --version
+
+      - name: Fetch Mesa
+        env:
+          REF: ${{ github.event.inputs.mesa_ref || 'ec586407f5' }}
+        run: |
+          git init mesa
+          cd mesa
+          git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+          git fetch --depth 1 origin "$REF"
+          git checkout FETCH_HEAD
+          git log -1 --format='%H %cd %s'
+
+      - name: Configure Mesa (Vulkan gfxstream ICD only)
+        run: |
+          cd mesa
+          meson setup build --buildtype=release -Dwerror=false \
+            -Dvulkan-drivers=gfxstream \
+            -Dgallium-drivers= \
+            -Dplatforms= \
+            -Dopengl=false \
+            -Dgbm=disabled -Dglx=disabled -Degl=disabled \
+            -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled
+
+      - name: Build ICD
+        run: |
+          cd mesa
+          ninja -C build src/gfxstream/libvulkan_gfxstream.so
+
+      - name: Package
+        run: |
+          mkdir -p out
+          cp mesa/build/src/gfxstream/libvulkan_gfxstream.so out/
+          strip --strip-unneeded out/libvulkan_gfxstream.so || true
+          ls -l out
+          file out/libvulkan_gfxstream.so || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libvulkan_gfxstream-${{ github.run_number }}
+          path: out/libvulkan_gfxstream.so
+          if-no-files-found: error
