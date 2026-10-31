@@ -6,7 +6,7 @@ on:
       mesa_ref:
         description: Mesa git ref/commit to build
         required: false
-        default: ec586407f5
+        default: ec586407f5b11a7c200e52beb7fe0fe8eb17a376
   push:
     branches: [main]
 
@@ -30,14 +30,13 @@ jobs:
 
       - name: Fetch Mesa
         env:
-          REF: ${{ github.event.inputs.mesa_ref || 'ec586407f5' }}
+          REF: ${{ github.event.inputs.mesa_ref || 'ec586407f5b11a7c200e52beb7fe0fe8eb17a376' }}
         run: |
-          git init mesa
-          cd mesa
-          git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
-          git fetch --depth 1 origin "$REF"
-          git checkout FETCH_HEAD
-          git log -1 --format='%H %cd %s'
+          curl -fL --retry 3 -o mesa.tar.gz "https://gitlab.freedesktop.org/mesa/mesa/-/archive/${REF}/mesa-${REF}.tar.gz"
+          mkdir -p mesa
+          tar xf mesa.tar.gz -C mesa --strip-components=1
+          echo "Mesa ref: $REF"
+          ls mesa | head
 
       - name: Configure Mesa (Vulkan gfxstream ICD only)
         run: |
