@@ -23,10 +23,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential git ca-certificates ninja-build meson pkg-config \
-            python3-mako python3-yaml python3-packaging python3-setuptools \
+            build-essential git ca-certificates ninja-build pkg-config \
+            python3-pip python3-mako python3-yaml python3-packaging python3-setuptools \
             bison flex zlib1g-dev libdrm-dev libzstd-dev libexpat1-dev
-          meson --version
+          python3 -m pip install --user --break-system-packages 'meson>=1.5'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/meson" --version
 
       - name: Fetch Mesa
         env:
