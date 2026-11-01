@@ -24,6 +24,7 @@ on:
       - 'scripts/*niri_image_query_trace*'
       - 'scripts/*classic_image_bridge*'
       - 'scripts/*niri_cib_diagnostics*'
+      - 'scripts/*niri_cib_format_support*'
 
 permissions:
   contents: read
@@ -261,10 +262,13 @@ jobs:
           "$RUNNER_TEMP/test-classic-image-bridge"
           python3 -I ci/scripts/patch_niri_cib_diagnostics.py source
           python3 -I ci/scripts/test_niri_cib_diagnostics.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-diagnostics-tests.txt
+          python3 -I ci/scripts/patch_niri_cib_format_support.py source
+          python3 -I ci/scripts/test_niri_cib_format_support.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-format-support-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
           cp ci/scripts/*niri_cib_diagnostics* out/
+          cp ci/scripts/*niri_cib_format_support* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -357,7 +361,8 @@ jobs:
                   "Validate exact final-chain host pointer once before driver allocation in decoder and internal aliases; reject null/function/query/type/index/mask mismatch without fallback or borrowed-pointer free",
                   "Unconditional guest HOST_COHERENT to physical noncoherent rejection before backing acquisition, including alias and transformed indices; native coherent and noncoherent remain permitted",
                   "Bounded CIB1 activation diagnostics only: capset/readiness/query/create metadata, 8 records per site, no driver calls, stores, extra queries or return-value changes",
-                  "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed"
+                  "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed",
+                  "Add MUTABLE-only BGRA8/RGBA8 default image-support combos so guest classic BGRA8 ColorBuffers can be created before CIB alias; real native AHB query remains authoritative"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -470,6 +475,14 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_cib_diagnostics.py', 'test_niri_cib_diagnostics.py',
                                           'niri-cib-diagnostics-tests.txt']}
+              },
+              "niri_cib_format_support": {
+                  "fix": "Add MUTABLE-only BGRA8 and RGBA8 default image-support combos alongside the retained MUTABLE|EXTENDED_USAGE entries; existing type/tiling/usage loops populate them and the real native AHB query decides supported",
+                  "diagnostic": "Bounded CIB1-DIAG-FMT-DEFAULT summary counts BGRA/RGBA entries and supported MUTABLE-only entries under GFXSTREAM_NIRI_IMAGE_TRACE; ColorBuffer creation keeps its existing ColorBuffer/create error logs",
+                  "unchanged": "No bridge special-case in createVkColorBufferLocked or generateColorBufferVkImageCreateInfoLocked; no other default combo or readiness/create gate changed",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_cib_format_support.py', 'test_niri_cib_format_support.py',
+                                          'niri-cib-format-support-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
