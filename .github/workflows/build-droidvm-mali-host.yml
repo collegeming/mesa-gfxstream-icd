@@ -26,6 +26,7 @@ on:
       - 'scripts/*niri_cib_diagnostics*'
       - 'scripts/*niri_cib_format_support*'
       - 'scripts/*niri_cib_create_diag*'
+      - 'scripts/*niri_cib_resource_diag*'
 
 permissions:
   contents: read
@@ -267,12 +268,15 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_format_support.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-format-support-tests.txt
           python3 -I ci/scripts/patch_niri_cib_create_diag.py source
           python3 -I ci/scripts/test_niri_cib_create_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-create-diag-tests.txt
+          python3 -I ci/scripts/patch_niri_cib_resource_diag.py source
+          python3 -I ci/scripts/test_niri_cib_resource_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-resource-diag-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
           cp ci/scripts/*niri_cib_diagnostics* out/
           cp ci/scripts/*niri_cib_format_support* out/
           cp ci/scripts/*niri_cib_create_diag* out/
+          cp ci/scripts/*niri_cib_resource_diag* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -367,7 +371,8 @@ jobs:
                   "Bounded CIB1 activation diagnostics only: capset/readiness/query/create metadata, 8 records per site, no driver calls, stores, extra queries or return-value changes",
                   "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed",
                   "Add MUTABLE-only BGRA8/RGBA8 default image-support combos so guest classic BGRA8 ColorBuffers can be created before CIB alias; real native AHB query remains authoritative",
-                  "Fall back to plain image-format properties when the external query rejects an entry; mark it supported without claiming external memory"
+                  "Fall back to plain image-format properties when the external query rejects an entry; mark it supported without claiming external memory",
+                  "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -499,6 +504,16 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_cib_create_diag.py', 'test_niri_cib_create_diag.py',
                                           'niri-cib-create-diag-tests.txt']}
+              },
+              "niri_cib_resource_diag": {
+                  "default_enabled": False,
+                  "gate": "Existing GFXSTREAM_NIRI_IMAGE_TRACE exactly1; process-wide bounded records at the virtio layer where application name is unavailable",
+                  "bound": "At most16 records per site: create args, create result, attach lookup, CB format, CB create, CB result",
+                  "content": "createResource handle/target/format/bind/width/height/depth/array/last-level/samples/flags/iovs, created/existed/stride/map-size; VirtioGpuResource::Create COLOR_BUFFER format string and createColorBufferWithResourceHandle result; attachResource context/resource found/missing and map size",
+                  "unchanged": "No behavior, return values, map insertion, attach ordering or existing error paths changed; logging only",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_cib_resource_diag.py', 'test_niri_cib_resource_diag.py',
+                                          'niri-cib-resource-diag-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
