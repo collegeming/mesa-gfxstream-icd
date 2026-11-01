@@ -656,6 +656,52 @@ edit(
         VkResult result = vk->vkBindImageMemory2(device, bindInfoCount, pBindInfos);''',
 )
 
+# Use the same standalone helper exercised by the no-GPU CI mock-dispatch test.
+# Embed it in a tracked translation unit so the published source diff is complete.
+guard_header = (Path(__file__).resolve().parent / "dmabuf_import_guard.h").read_text(encoding="utf-8")
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '#include "vk_decoder_global_state.h"',
+    '#include "vk_decoder_global_state.h"\n' + guard_header.replace("#pragma once\n", ""),
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+    '''#ifndef _WIN32
+        // The selected host index must be valid for this exact DMA_BUF. Never
+        // choose another index: cached/coherent promises belong to the guest ABI.
+        if (emulateHostVisible && diagnosticFdInfo &&
+            importFdInfo.handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+            uint32_t fdMemoryTypeBits = 0;
+            const int rejectedFd = importFdInfo.fd;
+            auto releaseRejectedPool = [&] {
+                if (poolOffset >= 0) {
+                    if (auto* rejectedPool = HostVisiblePool::get()) {
+                        rejectedPool->free({{(uint64_t)poolOffset, poolSize}});
+                    }
+                    poolOffset = -1;
+                    poolSize = 0;
+                }
+            };
+            VkResult validation = validateHostVisibleDmaBufImport(
+                emulateHostVisible, device, importFdInfo.handleType, importFdInfo.fd,
+                localAllocInfo.memoryTypeIndex, vk->vkGetMemoryFdPropertiesKHR,
+                &fdMemoryTypeBits, [](int ownedFd) { close(ownedFd); }, releaseRejectedPool);
+            if (validation != VK_SUCCESS) {
+                GFXSTREAM_ERROR(
+                    "DMABUF-INDEX-REJECT: fd=%d index=%u fdBits=0x%x queryAvailable=%d "
+                    "size=%llu no-index-or-coherency-rewrite result=%d",
+                    rejectedFd, localAllocInfo.memoryTypeIndex, fdMemoryTypeBits,
+                    vk->vkGetMemoryFdPropertiesKHR != nullptr,
+                    (unsigned long long)localAllocInfo.allocationSize, (int)validation);
+                *pMemory = VK_NULL_HANDLE;
+                return validation;
+            }
+        }
+#endif
+        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+)
+
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.
 platform_default = (root / "host/vulkan/external_memory.cpp").read_text(encoding="utf-8")
 if """#elif defined(__ANDROID__)
