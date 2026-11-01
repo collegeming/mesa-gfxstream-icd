@@ -166,4 +166,16 @@ if (ANDROID)
 endif()""",
 )
 
+# 8. The vendored development stub shadows NDK api-level.h. Use the real NDK
+# definitions (including __ANDROID_API_U__) rather than changing the target API.
+edit(
+    "third_party/android/include/android/api-level.h",
+    "#define __ANDROID_API__ 10000",
+    """#if defined(__ANDROID__)
+#include_next <android/api-level.h>
+#else
+#define __ANDROID_API__ 10000
+#endif""",
+)
+
 print("done")
