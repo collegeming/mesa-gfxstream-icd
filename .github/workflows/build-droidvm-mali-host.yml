@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -23,6 +23,7 @@ on:
       - 'scripts/*niri_image_external_types*'
       - 'scripts/*niri_image_query_trace*'
       - 'scripts/*classic_image_bridge*'
+      - 'scripts/*niri_cib_diagnostics*'
 
 permissions:
   contents: read
@@ -249,7 +250,7 @@ jobs:
             "$RUNNER_TEMP/test-niri-image-types.cpp" -o "$RUNNER_TEMP/test-niri-image-types"
           "$RUNNER_TEMP/test-niri-image-types"
 
-      - name: Apply CIB1 host export-only bridge and test paired boundaries
+      - name: Apply CIB1 host export-only bridge, paired boundaries, and bounded diagnostics
         shell: bash
         run: |
           set -euo pipefail
@@ -258,9 +259,12 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
             -Ivulkan-headers/include -Ici/scripts ci/scripts/test_classic_image_bridge.cpp -o "$RUNNER_TEMP/test-classic-image-bridge"
           "$RUNNER_TEMP/test-classic-image-bridge"
+          python3 -I ci/scripts/patch_niri_cib_diagnostics.py source
+          python3 -I ci/scripts/test_niri_cib_diagnostics.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-diagnostics-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
+          cp ci/scripts/*niri_cib_diagnostics* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -351,7 +355,9 @@ jobs:
                   "Default-disabled staging contract readiness gate rejects opt-in emulated guest-coherent allocations until paired backend/guest negotiation exists; no memory flag rewrite",
                   "Shared bounded identity/range/epoch state machine embedded in production; transfer callbacks exercised only by CPU mocks",
                   "Validate exact final-chain host pointer once before driver allocation in decoder and internal aliases; reject null/function/query/type/index/mask mismatch without fallback or borrowed-pointer free",
-                  "Unconditional guest HOST_COHERENT to physical noncoherent rejection before backing acquisition, including alias and transformed indices; native coherent and noncoherent remain permitted"
+                  "Unconditional guest HOST_COHERENT to physical noncoherent rejection before backing acquisition, including alias and transformed indices; native coherent and noncoherent remain permitted",
+                  "Bounded CIB1 activation diagnostics only: capset/readiness/query/create metadata, 8 records per site, no driver calls, stores, extra queries or return-value changes",
+                  "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -453,6 +459,17 @@ jobs:
                              for name in ['classic_image_bridge.h', 'patch_classic_image_bridge.py',
                                           'test_classic_image_bridge.cpp', 'test_classic_image_bridge_integration.py',
                                           'classic-image-bridge-tests.txt']}
+              },
+              "niri_cib_diagnostics": {
+                  "default_enabled": False,
+                  "gate": "Existing GFXSTREAM_NIRI_IMAGE_TRACE exactly1; readiness/capset are process-wide bounded records, query/create records additionally require instance applicationName exactly niri",
+                  "bound": "At most8 records per diagnostic site (emulation readiness, decoder readiness, capset fill, image query, image create); no unbounded pNext walk",
+                  "content": "Capset feature/hasEmulationVk/snapshots/ready/wrote and version/contract; readiness feature/AndroidAHB/import/dvk/AHB-props-fn/allocate-fn/physical/typeCount/physical flags/candidates/room; query and create NativeBuffer marker state, handle/stride/format/usage, usage2 consumer/producer, viewFormatCount and first4 formats, absent-marker external/pNext fields",
+                  "readiness_fix": "Default probe-list mImageSupportInfo RGBA/BGRA conditions removed from CIB1 readiness because the probe list is unpopulated at this stage; actual per-format native AHB query in classicImageQueryLocked and actual alias image creation in createClassicImageLocked remain fail-closed",
+                  "unchanged": "No extra Vulkan queries, driver calls, allocations, guest stores, payload access, dispatch-order changes or other gate changes",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_cib_diagnostics.py', 'test_niri_cib_diagnostics.py',
+                                          'niri-cib-diagnostics-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
