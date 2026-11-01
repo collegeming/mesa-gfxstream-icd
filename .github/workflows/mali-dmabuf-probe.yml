@@ -17,11 +17,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Select installed NDK r27c
+      - name: Select or install pinned NDK r27c
         shell: bash
         run: |
           set -euo pipefail
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -f "$NDK/source.properties" ]; then
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.2.12479018'
+          fi
           test -f "$NDK/source.properties"
           test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
           printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
