@@ -32,8 +32,16 @@ defaults = formats[start:formats.index('return imageSupport;', start)]
 assert defaults.count('{VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},') == 1
 assert defaults.count('{VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},') == 1
 # Existing EXTENDED_USAGE entries remain; no other default combo is removed.
-assert defaults.count('{VK_FORMAT_R8G8B8A8_UNORM,\n         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},') == 1
-assert defaults.count('{VK_FORMAT_B8G8R8A8_UNORM,\n         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},') == 1
+rgba_extended = '{VK_FORMAT_R8G8B8A8_UNORM,\n         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},'
+bgra_extended = '{VK_FORMAT_B8G8R8A8_UNORM,\n         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},'
+assert defaults.count(rgba_extended) == 1
+assert defaults.count(bgra_extended) == 1
+# BGRA8 classic MUTABLE-only must be selected before the EXTENDED gralloc entry;
+# RGBA8 keeps its already-supported EXTENDED entry first.
+assert defaults.index('{VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},') < \
+    defaults.index(bgra_extended)
+assert defaults.index(rgba_extended) < \
+    defaults.index('{VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},')
 for token in ['for (auto combo : combos)', 'for (auto t : types)', 'for (auto ti : tilings)',
               'for (auto u : usageFlags)']:
     assert token in defaults
@@ -54,6 +62,22 @@ for token in ['bgra-all=%u bgra-mutable=%u bgra-extended=%u',
 assert ops.index('populateImageFormatExternalMemorySupportInfo(ivk, emulation->mPhysicalDevice,') < \
     ops.index('CIB1-DIAG-FMT-DEFAULT')
 
+# External FORMAT_NOT_SUPPORTED falls back to the plain 1.0 query and marks
+# supported without claiming external memory. The native create remains the
+# authority and the external success path is unchanged.
+external_query = ops.index('mGetImageFormatProperties2Func(physdev, &formatInfo2, &outProps2)')
+fallback = ops.index('vkGetPhysicalDeviceImageFormatProperties(\n                physdev, info->format')
+assert external_query < fallback
+assert ops.index('if (res == VK_ERROR_FORMAT_NOT_SUPPORTED) {') < fallback
+for token in ['VkImageFormatProperties plainProps{}', 'plainRes',
+              'info->supported = true;', 'info->supportsExternalMemory = false;',
+              'info->requiresDedicatedAllocation = false;', 'CIB1-DIAG-FMT-FALLBACK',
+              'plain=success external=0']:
+    assert token in ops
+assert ops.count('CIB1-DIAG-FMT-FALLBACK') == 1
+assert 'cibFallbackLogs.fetch_add(1, std::memory_order_relaxed) < 16' in ops
+assert 'info->supportsExternalMemory = supportsExternalMemory() &&' in ops
+
 # No bridge-specific branch was added to the generic ColorBuffer image creation path.
 generate = ops[ops.index('std::unique_ptr<VkImageCreateInfo> VkEmulation::generateColorBufferVkImageCreateInfoLocked('):
                ops.index('std::unique_ptr<VkImageCreateInfo> VkEmulation::generateColorBufferVkImageCreateInfo(', 1)]
@@ -72,4 +96,4 @@ assert "scripts/*niri_cib_format_support*" in workflow
 assert '"niri_cib_format_support"' in workflow
 assert 'diagnostic/niri-cib-readiness' in workflow
 
-print('PASS: CIB1 MUTABLE-only BGRA8/RGBA8 default combos added, EXTENDED entries retained, bounded support summary present, no bridge special-case')
+print('PASS: CIB1 MUTABLE-only BGRA8/RGBA8 default combos added, external-query plain fallback added without external claim, bounded summary present, no bridge special-case')
