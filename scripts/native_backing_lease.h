@@ -216,10 +216,15 @@ inline bool validExtent(const Allocation& owner, uint64_t requested, uint64_t pa
     return rounded <= owner.size() && rounded <= std::numeric_limits<uintptr_t>::max() - address;
 }
 
-// Stable virtio blob ABI values: HOST3D=2, MAPPABLE=1, SHAREABLE=2.
-// Guest-handle imports, cross-device and unknown flags are not native backing.
+// Allocation metadata and resource-create flags are different protocol stages.
+// The paired guest leaves VkCreateBlobGOOGLE.blobFlags zero on deferred HOST3D
+// allocation; MAPPABLE is supplied later in virtio RESOURCE_CREATE_BLOB at map.
+// HOST3D=2, MAPPABLE=1, SHAREABLE=2. Never accept guest/cross-device/unknown bits.
 inline bool nativeBlob(bool hasBlob, uint32_t memory, uint32_t flags) {
-    return !hasBlob || (memory == 2 && (flags & 1) && !(flags & ~uint32_t(3)));
+    return !hasBlob || (memory == 2 && !(flags & ~uint32_t(3)));
+}
+inline bool nativeResource(uint32_t memory, uint32_t flags) {
+    return memory == 2 && (flags & 1) && !(flags & ~uint32_t(3));
 }
 
 class MapState {

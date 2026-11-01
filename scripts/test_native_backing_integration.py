@@ -17,6 +17,10 @@ assert 'std::make_shared<native::Allocation>' in d
 assert 'nativeDevice->nativeLifetime, device, *pMemory, memoryInfo.size,' in d
 assert 'generation, vk->vkUnmapMemory, vk->vkFreeMemory' in d
 assert 'native::publicationReady() || !info->nativeOwner' in d
+assert 'NATIVE-LEASE-PUBLISH-REJECT: ready=%d owner=%d owner-epoch=%llu' in d
+assert 'NATIVE-LEASE-ALLOC: eligible=%d ready=%d host-visible=%d virtio-next=%d' in d
+assert r.count('native::nativeResource(createBlobArgs->blob_mem, createBlobArgs->blob_flags)') == 2
+assert 'NATIVE-LEASE-CREATE-REJECT:' in r
 assert 'if (!owner || !owner->generation()) return false;' in m
 assert 'poolOffset < 0 && folioCharge.bytes() == 0 &&' in d
 assert 'native::nativeBlob(createBlobInfoPtr != nullptr,' in d
