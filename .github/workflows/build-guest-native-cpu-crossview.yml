@@ -1,0 +1,102 @@
+name: build-guest-native-cpu-crossview
+
+on:
+  push:
+    branches: [diagnostic/guest-native-cpu-crossview]
+    paths:
+      - 'diagnostic/guest_native_cpu_crossview.c'
+      - 'diagnostic/test_guest_native_cpu_crossview.c'
+      - 'diagnostic/check_guest_native_cpu_crossview.py'
+      - '.github/workflows/build-guest-native-cpu-crossview.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests-and-guest-compile-only:
+    if: github.ref == 'refs/heads/diagnostic/guest-native-cpu-crossview'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and sanitizer dependencies
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils file libvulkan-dev python3
+      - name: Structural safety and actual production CPU helper tests only
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_guest_native_cpu_crossview.py diagnostic/guest_native_cpu_crossview.c | tee out/source-safety.txt
+          gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            diagnostic/test_guest_native_cpu_crossview.c -o out/cpu-helper-test
+          nm -u out/cpu-helper-test | tee out/cpu-helper-imports.txt
+          if grep -Eq '\bvk[A-Z]|libvulkan' out/cpu-helper-imports.txt; then exit 1; fi
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ./out/cpu-helper-test | tee out/cpu-helper-tests.txt
+          python3 -I - <<'PY' | tee out/cpu-stage-order.txt
+          import pathlib, re
+          text = pathlib.Path('out/cpu-helper-tests.txt').read_text()
+          assert text.count('stage=word-bounds FAIL') == 14
+          assert re.findall(r'BEGIN stage=(\S+)', text) == ['request-first-write', 'request-last-write'] + ['reply-first-read', 'reply-last-read'] * 4
+          assert text.count('RESULT stage=reply-verify FAIL') == 3
+          assert text.count('RESULT stage=reply-verify PASS') == 1
+          print('PASS production helper stage order, 14 rejects, missing-host/wrong-reply oracle and exact reply on ordinary CPU arrays only')
+          PY
+      - name: Compile actual guest binary and inspect ELF only (NEVER execute)
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" diagnostic/guest_native_cpu_crossview.c \
+            -o out/guest-native-cpu-crossview -lvulkan 2>&1 | tee out/compiler.log
+          file out/guest-native-cpu-crossview | tee out/binary-info.txt
+          readelf -h -l -d -V -n out/guest-native-cpu-crossview | tee out/elf-info.txt
+          nm -u out/guest-native-cpu-crossview | tee out/undefined-symbols.txt
+          python3 -I diagnostic/check_guest_native_cpu_crossview.py diagnostic/guest_native_cpu_crossview.c \
+            out/undefined-symbols.txt out/elf-info.txt | tee out/symbol-safety.txt
+      - name: Package source tests workflow provenance and hashes without guest execution
+        run: |
+          set -euo pipefail
+          {
+            printf 'probe=guest-native-cpu-crossview-v1\nrepository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'run=%s/%s/actions/runs/%s\nattempt=%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseCommit=22ac42cb9e28e77068658a81c418245aaef1571e\nrunner=ubuntu-24.04-arm\n'
+            uname -a
+            gcc --version
+            ldd --version
+            dpkg-query -W libc6 libvulkan-dev libvulkan1
+            printf 'guestCompile=gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now -DPROBE_REVISION=commit -lvulkan\n'
+            printf 'execution=guest binary NEVER executed; actual production helper tested ASan/UBSan on ordinary initialized uint32 CPU arrays only; no Vulkan header/link in helper test\n'
+            printf 'boundary=one ordinary allocation4096 type8 guest HOST_VISIBLE|HOST_COHERENT pNextNULL; one map0/4096; two request writes; one vkFlushMappedMemoryRanges(device,1,&range) offset0 size4096 pNextNULL; two reply reads only on VK_SUCCESS; unmap/free/destroy\n'
+            printf 'protocol=request0=0x13579bdf request4092=0x2468ace0; reply0=0x89abcdef reply4092=0xfedcba98; missing host unchanged requests FAIL; API error skips reply reads; no retry\n'
+            printf 'hostContract=companion host original flush must succeed before owner/current epoch/no bound resources/both requests validation; then two reply writes; mismatch scoped validation error writes nothing\n'
+            printf 'hostEnvironment=parent sets exact GFXSTREAM_NATIVE_CPU_CROSSVIEW=1 only in inherited-environment-preserving wrapper after NEW authorization; no host edits in guest branch\n'
+            printf 'limits=no GPU resources/bindings/queue retrieval/commands/fence/submission/invalidate/extra cache ops; CPU cross-view NOT HOST_COHERENT or GPU coherence proof; driver-internal activity possible; internal blob size unknown\n'
+            printf 'review=parent reviews BOTH guest request writes and host reply writes BEFORE separate fresh user confirmation; prior CPU/GPU permissions NOT reused; --allow-cpu-crossview is interlock NOT user consent; no device execution authorized by this build; timeout cannot guarantee kernel-hang recovery\n'
+            printf 'selection=VK_DRIVER_FILES=/opt/droidvm-mesa-reference/icd.json; LD_LIBRARY_PATH first entry=/opt/droidvm-mesa-reference/usr/local/lib/aarch64-linux-gnu; selectors do not prove loaded driver identity\n'
+          } | tee out/build-provenance.txt
+          cp diagnostic/guest_native_cpu_crossview.c diagnostic/test_guest_native_cpu_crossview.c \
+            diagnostic/check_guest_native_cpu_crossview.py .github/workflows/build-guest-native-cpu-crossview.yml out/
+          rm out/cpu-helper-test
+          (cd out && sha256sum guest-native-cpu-crossview guest_native_cpu_crossview.c test_guest_native_cpu_crossview.c \
+            check_guest_native_cpu_crossview.py build-guest-native-cpu-crossview.yml compiler.log binary-info.txt elf-info.txt \
+            undefined-symbols.txt source-safety.txt symbol-safety.txt cpu-helper-imports.txt cpu-helper-tests.txt \
+            cpu-stage-order.txt build-provenance.txt | tee SHA256SUMS)
+          tar -czf guest-native-cpu-crossview-aarch64-glibc.tar.gz -C out .
+          sha256sum guest-native-cpu-crossview-aarch64-glibc.tar.gz | tee guest-native-cpu-crossview-aarch64-glibc.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-native-cpu-crossview-aarch64-glibc
+          path: |
+            guest-native-cpu-crossview-aarch64-glibc.tar.gz
+            guest-native-cpu-crossview-aarch64-glibc.tar.gz.sha256
+            out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
