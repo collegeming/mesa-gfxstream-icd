@@ -60,10 +60,11 @@ jobs:
           ninja -C build
           find build -name 'libvulkan_gfxstream.so*' -type f | head -5
 
-      - name: Build backtrace helper
+      - name: Build backtrace helper and C probe
         run: |
           mkdir -p out
-          gcc -shared -fPIC -O1 -g -o out/libbt.so bt.c
+          gcc -shared -fPIC -O1 -g -fno-omit-frame-pointer -o out/libbt.so bt.c
+          gcc -O0 -g -fno-omit-frame-pointer -o out/vkprobe probe.c -ldl
           ls -l out
 
       - name: Package
@@ -81,4 +82,5 @@ jobs:
           path: |
             out/libvulkan_gfxstream.so
             out/libbt.so
+            out/vkprobe
           if-no-files-found: error
