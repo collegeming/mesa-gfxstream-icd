@@ -1,0 +1,161 @@
+name: build-droidvm-mali-host
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/droidvm-mali-host]
+    paths:
+      - '.github/workflows/build-droidvm-mali-host.yml'
+      - 'scripts/patch_droidvm_build.py'
+      - 'scripts/patch_droidvm_mali_host.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: droidvm-mali-host-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GFXSTREAM_COMMIT: cbc6df3b11b3eac8fb13d89e0a542f763b3bdfcc
+  VULKAN_HEADERS_TAG_OBJECT: 43711cfe7d642355a20af7c0a850ef4de88bcb60
+  VULKAN_HEADERS_COMMIT: 11d6898377797e07dbd543aaaa367e4465074597
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: ci
+          persist-credentials: false
+
+      - name: Checkout pinned DroidVM gfxstream
+        uses: actions/checkout@v4
+        with:
+          repository: collegeming/gfxstream-1
+          ref: ${{ env.GFXSTREAM_COMMIT }}
+          path: source
+          persist-credentials: false
+
+      - name: Checkout pinned Vulkan-Headers 1.4.358
+        uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: ${{ env.VULKAN_HEADERS_COMMIT }}
+          path: vulkan-headers
+          persist-credentials: false
+
+      - name: Verify pins, replace headers, and apply minimal patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$GFXSTREAM_COMMIT"
+          test "$(git -C vulkan-headers rev-parse HEAD)" = "$VULKAN_HEADERS_COMMIT"
+          grep -Eq '^#define VK_HEADER_VERSION 358$' vulkan-headers/include/vulkan/vulkan_core.h
+          rm -rf source/third_party/vulkan_headers
+          mkdir source/third_party/vulkan_headers
+          git -C vulkan-headers archive HEAD | tar -x -C source/third_party/vulkan_headers
+          python3 -I ci/scripts/patch_droidvm_build.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/patch_droidvm_mali_host.py "$GITHUB_WORKSPACE/source"
+          git -C source diff --check
+          mkdir out
+          git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
+          git -C source diff --stat -- . ':!third_party/vulkan_headers'
+          cp ci/scripts/patch_droidvm_build.py ci/scripts/patch_droidvm_mali_host.py out/
+          cp ci/.github/workflows/build-droidvm-mali-host.yml out/
+
+      - name: Fetch Android NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/droidvm-ndk-download" "$RUNNER_TEMP/droidvm-ndk-extract"
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          sha256sum "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | cut -d ' ' -f 1 > out/ndk-archive.sha256
+          unzip -q "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" -d "$RUNNER_TEMP/droidvm-ndk-extract"
+          printf 'ANDROID_NDK_HOME=%s/droidvm-ndk-extract/android-ndk-r27c\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Configure Android 33 arm64 Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Eq '^Pkg.Revision = 27.2.12479018$' "$ANDROID_NDK_HOME/source.properties"
+          cmake -S source -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-33 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STANDALONE=ON
+
+      - name: Build gfxstream_backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-android --target gfxstream_backend -j"$(nproc)"
+
+      - name: Package binary, exact provenance, and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t libraries < <(find build-android -type f -name libgfxstream_backend.so)
+          test "${#libraries[@]}" -eq 1
+          cp "${libraries[0]}" out/libgfxstream_backend.so
+          cp "$ANDROID_NDK_HOME/source.properties" out/ndk-source.properties
+          cp build-android/CMakeCache.txt out/
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            --file-header --dynamic out/libgfxstream_backend.so > out/elf-info.txt
+          grep -Eq 'Machine:.*AArch64' out/elf-info.txt
+          python3 -I - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          provenance = {
+              "ci_repository": os.environ["GITHUB_REPOSITORY"],
+              "ci_commit": os.environ["GITHUB_SHA"],
+              "ci_checkout_commit": git("-C", "ci", "rev-parse", "HEAD"),
+              "ci_branch": os.environ["GITHUB_REF_NAME"],
+              "ci_run_url": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
+              "ci_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "source_repository": "collegeming/gfxstream-1",
+              "source_commit": git("-C", "source", "rev-parse", "HEAD"),
+              "vulkan_headers_repository": "KhronosGroup/Vulkan-Headers",
+              "vulkan_headers_version": "1.4.358",
+              "vulkan_headers_tag_object": os.environ["VULKAN_HEADERS_TAG_OBJECT"],
+              "vulkan_headers_commit": git("-C", "vulkan-headers", "rev-parse", "HEAD"),
+              "vulkan_headers_replaced_path": "third_party/vulkan_headers",
+              "ndk": "r27c (27.2.12479018)",
+              "ndk_archive_sha256": Path("out/ndk-archive.sha256").read_text().strip(),
+              "android_api": 33,
+              "abi": "arm64-v8a",
+              "build_type": "Release",
+              "target": "gfxstream_backend",
+              "semantic_patches": [
+                  "Do not advertise hasSetMetadataCommand (set to 0)",
+                  "When AHB/image memory type intersection is zero, use ahbProps.memoryTypeBits",
+                  "Default renderer Android external memory mode to AndroidAHB; preserve explicit overrides"
+              ],
+              "source_patch": "gfxstream-android-mali.patch (excludes separately pinned Vulkan-Headers replacement)",
+              "validation": "GitHub Actions cross-build and ELF inspection only; no device/runtime test"
+          }
+          assert provenance["ci_commit"] == provenance["ci_checkout_commit"]
+          Path("out/provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+          PY
+          (cd out && sha256sum * > SHA256SUMS && sha256sum -c SHA256SUMS)
+          printf 'Built source `%s` with Vulkan-Headers `%s`.\n\n' "$GFXSTREAM_COMMIT" "$VULKAN_HEADERS_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Artifact includes the library, complete non-header source patch, patch scripts, workflow, provenance, and SHA256SUMS. No runtime/device validation was performed.\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload DroidVM Mali host
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidvm-mali-host-android33-arm64-cbc6df3b-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
