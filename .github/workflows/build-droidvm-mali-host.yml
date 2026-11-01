@@ -260,7 +260,7 @@ jobs:
             -Ivulkan-headers/include -Ici/scripts ci/scripts/test_classic_image_bridge.cpp -o "$RUNNER_TEMP/test-classic-image-bridge"
           "$RUNNER_TEMP/test-classic-image-bridge"
           python3 -I ci/scripts/patch_niri_cib_diagnostics.py source
-          python3 -I ci/scripts/test_niri_cib_diagnostics.py source | tee out/niri-cib-diagnostics-tests.txt
+          python3 -I ci/scripts/test_niri_cib_diagnostics.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-diagnostics-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/

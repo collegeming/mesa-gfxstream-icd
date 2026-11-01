@@ -5,7 +5,9 @@ import re
 from pathlib import Path
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('root', type=Path)
-root = p.parse_args().root.resolve()
+p.add_argument('workflow', type=Path, nargs='?')
+args = p.parse_args()
+root = args.root.resolve()
 
 def read(rel):
     return (root / rel).read_text()
@@ -17,10 +19,17 @@ def block(text, start, end):
 common = read('host/vulkan/vk_common_operations.cpp')
 frontend = read('host/virtio_gpu_frontend.cpp')
 decoder = read('host/vulkan/vk_decoder_global_state.cpp')
-workflow_path = root / '.github/workflows/build-droidvm-mali-host.yml'
-if not workflow_path.is_file():
-    workflow_path = root.parent / '.github/workflows/build-droidvm-mali-host.yml'
-workflow = workflow_path.read_text()
+if args.workflow:
+    workflow = args.workflow.resolve().read_text()
+else:
+    candidates = [
+        root / '.github/workflows/build-droidvm-mali-host.yml',
+        root.parent / '.github/workflows/build-droidvm-mali-host.yml',
+        root.parent / 'ci/.github/workflows/build-droidvm-mali-host.yml',
+    ]
+    workflow_path = next((x for x in candidates if x.is_file()), None)
+    assert workflow_path is not None, 'CI workflow not found'
+    workflow = workflow_path.read_text()
 
 DRIVER = re.compile(r'(?<![A-Za-z0-9_])vk->')
 BOUND = 'diagnostics.fetch_add(1, std::memory_order_relaxed) < 8'
