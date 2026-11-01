@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -16,6 +16,7 @@ on:
       - 'scripts/test_host_memory_contract.cpp'
       - 'scripts/test_host_memory_integration.py'
       - 'scripts/*native_backing*'
+      - 'scripts/*native_roundtrip*'
 
 permissions:
   contents: read
@@ -69,6 +70,10 @@ jobs:
           python3 -I ci/scripts/patch_droidvm_build.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_droidvm_mali_host.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_native_backing_lease.py "$GITHUB_WORKSPACE/source"
+          mkdir "$RUNNER_TEMP/native-roundtrip-before"
+          cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-roundtrip-before/"
+          python3 -I ci/scripts/patch_native_roundtrip_trace.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_native_roundtrip_integration.py "$RUNNER_TEMP/native-roundtrip-before" "$GITHUB_WORKSPACE/source"
           git -C source diff --check
           mkdir out
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
@@ -80,6 +85,7 @@ jobs:
           cp ci/scripts/host_memory_contract.h ci/scripts/test_host_memory_contract.cpp out/
           cp ci/scripts/test_host_memory_integration.py out/
           cp ci/scripts/*native_backing* out/
+          cp ci/scripts/*native_roundtrip* out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -173,6 +179,16 @@ jobs:
             -o "$RUNNER_TEMP/test-native-manager"
           "$RUNNER_TEMP/test-native-manager" | tee -a out/native-backing-tests.txt
           python3 -I ci/scripts/test_native_backing_integration.py source | tee -a out/native-backing-tests.txt
+
+      - name: Test metadata trace gate and concurrent bounds (no GPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Ici/scripts \
+            ci/scripts/test_native_roundtrip_trace.cpp -o "$RUNNER_TEMP/test-native-roundtrip-trace"
+          "$RUNNER_TEMP/test-native-roundtrip-trace"
+          python3 -I ci/scripts/test_native_roundtrip_integration.py "$RUNNER_TEMP/native-roundtrip-before" source | tee out/native-roundtrip-trace-tests.txt
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -291,6 +307,18 @@ jobs:
                                           'test_native_backing_lease.cpp', 'test_native_backing_manager.cpp',
                                           'test_native_backing_integration.py', 'test_native_backing_negotiation.cpp',
                                           'native-backing-tests.txt']}
+              },
+              "native_roundtrip_trace": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NATIVE_ROUNDTRIP_TRACE exactly 1 AND app exactly guest-native-buffer-roundtrip or guest-native-first-touch",
+                  "bound": "16 global events per stage; command regions/submit command entries separately bounded",
+                  "content": "Allocation/map identities, buffer binds, direct/subdecoder copy metadata, real queue dispatch and fence wait results, inline/aux flush byte counts; no payload reads or writes",
+                  "semantics": "All original Vulkan driver call expressions unchanged; no command/synchronization/cache/index/memory flag changes",
+                  "auxiliary": "Pinned host does not advertise auxiliary command memory; handler remains TODO unchanged; no claimed runtime cause",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['native_roundtrip_trace.h', 'patch_native_roundtrip_trace.py',
+                                          'test_native_roundtrip_trace.cpp', 'test_native_roundtrip_integration.py',
+                                          'native-roundtrip-trace-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
