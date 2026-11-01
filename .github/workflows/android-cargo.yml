@@ -91,8 +91,22 @@ jobs:
           cp /usr/include/wayland*.h "$GITHUB_WORKSPACE/native-headers/"
           export CFLAGS_aarch64_linux_android="-I$GITHUB_WORKSPACE/native-headers"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN"
+          # Minijail's generic Cargo script invents a GCC prefix. Select the genuine NDK tools
+          # and build only the static archive the Rust script actually links (not unused CLI/shared targets).
+          python3 -I - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('minijail/rust/minijail-sys/build.rs')
+          s = p.read_text()
+          old = '.env("BUILD_STATIC_LIBS", "yes")'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '\n            .env("CC", std::env::var("CC_aarch64_linux_android").unwrap())\n            .env("CXX", std::env::var("CXX_aarch64_linux_android").unwrap())\n            .env("AR", std::env::var("AR_aarch64_linux_android").unwrap())\n            .env("CPPFLAGS", format!("-I{}/native-headers", std::env::var("GITHUB_WORKSPACE").unwrap()))\n            .arg("CC_STATIC_LIBRARY(libminijail.pic.a)")')
+          p.write_text(s)
+          PY
+          mkdir -p "$GITHUB_WORKSPACE/native-headers/sys"
+          cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
           cd source
-          cargo check --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,android_display,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
+          cargo check --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
       - name: Package discovery evidence (never claim a binary for cargo check)
         if: always()
         shell: bash
@@ -100,7 +114,8 @@ jobs:
           mkdir -p evidence
           test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
           git -C source diff --binary > evidence/source.patch
-          printf '%s\n' 'DISCOVERY ONLY. Android app console requires real libcrosvm_android_display_client. No stub libraries. No detach patch applied in baseline.' > evidence/scope.txt
+          git -C minijail diff --binary > evidence/minijail.patch
+          printf '%s\n' 'DISCOVERY ONLY. Real built-in headless GPU display; Android app graphical console not included. GPU/gfxstream/KVM/network/serial retained in intended feature set. No stub libraries. No detach patch applied in baseline.' > evidence/scope.txt
       - name: Upload exact diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
