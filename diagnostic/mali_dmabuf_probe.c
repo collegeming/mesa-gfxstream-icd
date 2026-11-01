@@ -12,11 +12,17 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/utsname.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Linux UAPI, deliberately local: old NDK sysroots may lack linux/udmabuf.h. */
 struct probe_udmabuf_create { uint32_t memfd, flags; uint64_t offset, size; };
 #define PROBE_UDMABUF_CREATE _IOW('u', 0x42, struct probe_udmabuf_create)
+struct probe_dma_buf_sync { uint64_t flags; };
+#define PROBE_DMA_BUF_IOCTL_SYNC _IOW('b', 0, struct probe_dma_buf_sync)
+#define PROBE_DMA_BUF_SYNC_READ (1ULL << 0)
+#define PROBE_DMA_BUF_SYNC_WRITE (2ULL << 0)
+#define PROBE_DMA_BUF_SYNC_END (1ULL << 2)
 #define LOG(...) do { printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 #define RESULT(stage, ...) do { printf("RESULT stage=%s ", stage); LOG(__VA_ARGS__); } while (0)
 
@@ -57,7 +63,114 @@ static void image_caps(VkPhysicalDevice pd, VkExternalMemoryHandleTypeFlagBits h
             !!(p.externalMemoryFeatures&VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT),p.compatibleHandleTypes);
     }
 }
-static void dma_probe(VkPhysicalDevice pd,VkDevice dev,const VkPhysicalDeviceMemoryProperties *mp) {
+static int dma_cpu_sync(int fd, uint64_t flags, const char *phase) {
+    struct probe_dma_buf_sync sync={.flags=flags};
+    int r;
+    /* No indefinite retry if the device is interrupted or busy. */
+    for(unsigned attempt=0;;++attempt) {
+        r=ioctl(fd,PROBE_DMA_BUF_IOCTL_SYNC,&sync);
+        if(r==0 || (errno!=EINTR && errno!=EAGAIN) || attempt==7) break;
+    }
+    if(r<0) LOG("DMA CPU sync phase=%s flags=0x%" PRIx64 " errno=%d %s",phase,flags,errno,strerror(errno));
+    else LOG("DMA CPU sync phase=%s flags=0x%" PRIx64 " OK",phase,flags);
+    return r;
+}
+static uint64_t monotonic_ns(void) {
+    struct timespec t;
+    if(clock_gettime(CLOCK_MONOTONIC,&t)) return 0;
+    return (uint64_t)t.tv_sec*1000000000ULL+(uint64_t)t.tv_nsec;
+}
+static void dma_gpu_fill(VkDevice dev,uint32_t family,VkBuffer buffer,int cpu_fd) {
+    const uint32_t pattern=0x1234abcd;
+    const size_t bytes=4096;
+    void *mapping=MAP_FAILED;
+    VkCommandPool pool=VK_NULL_HANDLE; VkFence fence=VK_NULL_HANDLE;
+    VkResult r;
+    mapping=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_SHARED,cpu_fd,0);
+    if(mapping==MAP_FAILED) { RESULT("dmabuf-gpu","BLOCKED mmap errno=%d %s",errno,strerror(errno)); return; }
+    /* This is a dma-buf mmap, NOT vkMapMemory. DMA_BUF_IOCTL_SYNC performs the
+     * CPU cache flush/invalidate; vkFlush/InvalidateMappedMemoryRanges would be
+     * invalid here. Initialize a different sentinel so stale data cannot PASS. */
+    if(dma_cpu_sync(cpu_fd,PROBE_DMA_BUF_SYNC_WRITE,"START_WRITE")<0) {
+        RESULT("dmabuf-gpu","BLOCKED CPU write sync; no GPU submit"); goto done;
+    }
+    memset(mapping,0xa5,bytes);
+    if(dma_cpu_sync(cpu_fd,PROBE_DMA_BUF_SYNC_WRITE|PROBE_DMA_BUF_SYNC_END,"END_WRITE")<0) {
+        RESULT("dmabuf-gpu","BLOCKED CPU write flush; no GPU submit"); goto done;
+    }
+    VkCommandPoolCreateInfo pci={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags=VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,.queueFamilyIndex=family};
+    r=vkCreateCommandPool(dev,&pci,NULL,&pool);
+    if(r!=VK_SUCCESS) { RESULT("dmabuf-gpu","FAIL create-pool result=%d",r); goto done; }
+    VkCommandBufferAllocateInfo cai={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool=pool,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};
+    VkCommandBuffer cmd=VK_NULL_HANDLE;
+    r=vkAllocateCommandBuffers(dev,&cai,&cmd);
+    if(r!=VK_SUCCESS) { RESULT("dmabuf-gpu","FAIL allocate-command result=%d",r); goto done; }
+    VkCommandBufferBeginInfo begin={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    r=vkBeginCommandBuffer(cmd,&begin);
+    if(r!=VK_SUCCESS) { RESULT("dmabuf-gpu","FAIL begin-command result=%d",r); goto done; }
+    /* Fresh VkBuffer, first and sole Vulkan queue, no foreign GPU/user. CPU mmap
+     * is host access, not a FOREIGN queue owner: no ownership transfer needed. */
+    VkBufferMemoryBarrier before={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask=VK_ACCESS_HOST_WRITE_BIT,.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
+        .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .buffer=buffer,.offset=0,.size=bytes};
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,NULL,1,&before,0,NULL);
+    vkCmdFillBuffer(cmd,buffer,0,bytes,pattern);
+    VkBufferMemoryBarrier after={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .buffer=buffer,.offset=0,.size=bytes};
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,NULL,1,&after,0,NULL);
+    r=vkEndCommandBuffer(cmd);
+    if(r!=VK_SUCCESS) { RESULT("dmabuf-gpu","FAIL end-command result=%d",r); goto done; }
+    VkFenceCreateInfo fci={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    r=vkCreateFence(dev,&fci,NULL,&fence);
+    if(r!=VK_SUCCESS) { RESULT("dmabuf-gpu","FAIL create-fence result=%d",r); goto done; }
+    VkQueue queue=VK_NULL_HANDLE; vkGetDeviceQueue(dev,family,0,&queue);
+    VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cmd};
+    LOG("DMA GPU vkCmdFillBuffer bytes=%zu pattern=0x%08" PRIx32 " family=%u ownership=IGNORED fenceTimeoutNs=5000000000",bytes,pattern,family);
+    uint64_t start=monotonic_ns();
+    r=vkQueueSubmit(queue,1,&submit,fence);
+    LOG("DMA GPU vkQueueSubmit result=%d",r);
+    if(r!=VK_SUCCESS) {
+        RESULT("dmabuf-gpu","FAIL submit result=%d; process exits without unsafe GPU cleanup",r);
+        _Exit(3);
+    }
+    r=vkWaitForFences(dev,1,&fence,VK_TRUE,5000000000ULL);
+    uint64_t end=monotonic_ns();
+    LOG("DMA GPU vkWaitForFences result=%d submitToFenceHostNs=%" PRIu64 " (includes CPU/driver overhead, NOT a throughput benchmark)",r,end>=start?end-start:0);
+    if(r!=VK_SUCCESS) {
+        RESULT("dmabuf-gpu","%s fence result=%d; no readback/no queue-idle; exit without destroying pending objects",r==VK_TIMEOUT?"TIMEOUT":"FAIL",r);
+        /* Do not free an in-flight buffer/pool/fence or wait indefinitely in
+         * vkDeviceWaitIdle/vkDestroyDevice. OS teardown on process exit. */
+        _Exit(r==VK_TIMEOUT?4:3);
+    }
+    if(dma_cpu_sync(cpu_fd,PROBE_DMA_BUF_SYNC_READ,"START_READ")<0) {
+        RESULT("dmabuf-gpu","BLOCKED read invalidate; fence completed, data not verified"); goto done;
+    }
+    const volatile uint32_t *words=(const volatile uint32_t *)mapping;
+    size_t mismatches=0,first=0;
+    uint32_t first_value=0;
+    for(size_t i=0;i<bytes/sizeof(uint32_t);++i) {
+        uint32_t value=words[i];
+        if(value!=pattern) { if(!mismatches) { first=i; first_value=value; } ++mismatches; }
+    }
+    uint32_t head=words[0],tail=words[bytes/sizeof(uint32_t)-1];
+    if(dma_cpu_sync(cpu_fd,PROBE_DMA_BUF_SYNC_READ|PROBE_DMA_BUF_SYNC_END,"END_READ")<0) {
+        RESULT("dmabuf-gpu","BLOCKED read-end sync; no PASS emitted"); goto done;
+    }
+    LOG("DMA GPU readback words=%zu expected=0x%08" PRIx32 " head=0x%08" PRIx32 " tail=0x%08" PRIx32 " mismatches=%zu",bytes/sizeof(uint32_t),pattern,head,tail,mismatches);
+    if(mismatches) RESULT("dmabuf-gpu","FAIL firstWord=%zu actual=0x%08" PRIx32 " mismatches=%zu",first,first_value,mismatches);
+    else RESULT("dmabuf-gpu","PASS vkCmdFillBuffer + fence + DMA_BUF_SYNC + mmap: all 1024 words equal 0x1234abcd; transfer execution only, not shader/render/performance proof");
+done:
+    if(fence) vkDestroyFence(dev,fence,NULL);
+    if(pool) vkDestroyCommandPool(dev,pool,NULL);
+    if(mapping!=MAP_FAILED) munmap(mapping,bytes);
+}
+static void dma_probe(VkPhysicalDevice pd,VkDevice dev,uint32_t family,const VkPhysicalDeviceMemoryProperties *mp) {
     VkExternalMemoryBufferCreateInfo ext={.sType=VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
         .handleTypes=VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
     VkBufferCreateInfo bi={.sType=VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,.pNext=&ext,.size=4096,
@@ -72,7 +185,7 @@ static void dma_probe(VkPhysicalDevice pd,VkDevice dev,const VkPhysicalDeviceMem
     PFN_vkGetMemoryFdPropertiesKHR fdprops=(PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(dev,"vkGetMemoryFdPropertiesKHR");
     if (!fdprops) { RESULT("dmabuf","ERROR enabled extension missing function"); return; }
     VkBuffer b=VK_NULL_HANDLE; VkDeviceMemory mem=VK_NULL_HANDLE;
-    int backing=-1,ud=-1,fd=-1;
+    int backing=-1,ud=-1,fd=-1,cpu_fd=-1;
     VkResult r=vkCreateBuffer(dev,&bi,NULL,&b);
     if (r!=VK_SUCCESS) { RESULT("dmabuf","create-buffer result=%d",r); return; }
     VkMemoryDedicatedRequirements dedicated={.sType=VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
@@ -95,6 +208,9 @@ static void dma_probe(VkPhysicalDevice pd,VkDevice dev,const VkPhysicalDeviceMem
     struct probe_udmabuf_create create={.memfd=(uint32_t)backing,.flags=1,.size=size};
     fd=ioctl(ud,PROBE_UDMABUF_CREATE,&create);
     if(fd<0) { RESULT("dmabuf","BLOCKED UDMABUF_CREATE errno=%d %s",errno,strerror(errno)); goto done; }
+    /* Keep an independent fd for mmap/SYNC; successful Vulkan import consumes fd. */
+    cpu_fd=fcntl(fd,F_DUPFD_CLOEXEC,0);
+    if(cpu_fd<0) { RESULT("dmabuf-gpu","BLOCKED duplicate dma-buf errno=%d %s",errno,strerror(errno)); goto done; }
     VkMemoryFdPropertiesKHR fp={.sType=VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
     r=fdprops(dev,VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,fd,&fp);
     LOG("DMA vkGetMemoryFdPropertiesKHR result=%d fdBits=0x%x",r,fp.memoryTypeBits);
@@ -115,10 +231,12 @@ static void dma_probe(VkPhysicalDevice pd,VkDevice dev,const VkPhysicalDeviceMem
     if(r!=VK_SUCCESS) { RESULT("dmabuf","FAIL import allocation result=%d (caller retains fd)",r); goto done; }
     fd=-1; /* Vulkan owns fd ONLY after successful import. */
     r=vkBindBufferMemory(dev,b,mem,0);
-    RESULT("dmabuf","%s vkBindBufferMemory result=%d (allocation/import/bind only, not GPU execution)",r==VK_SUCCESS?"PASS":"FAIL",r);
+    RESULT("dmabuf","%s vkBindBufferMemory result=%d (bind stage only; execution reported separately)",r==VK_SUCCESS?"PASS":"FAIL",r);
+    if(r==VK_SUCCESS) dma_gpu_fill(dev,family,b,cpu_fd);
 done:
     vkDestroyBuffer(dev,b,NULL);
     if(mem) vkFreeMemory(dev,mem,NULL);
+    if(cpu_fd>=0) close(cpu_fd);
     if(fd>=0) close(fd);
     if(ud>=0) close(ud);
     if(backing>=0) close(backing);
@@ -172,7 +290,7 @@ done:
 int main(void) {
     setvbuf(stdout,NULL,_IONBF,0);
     struct utsname un; if(!uname(&un)) LOG("SYSTEM %s %s %s %s",un.sysname,un.release,un.version,un.machine);
-    LOG("PROBE mali-dmabuf-v1 build=%s VulkanHeaders=%u AndroidAPI=%d; read-only capability queries plus temporary allocations; no queue submissions",PROBE_REVISION,VK_HEADER_VERSION,__ANDROID_API__);
+    LOG("PROBE mali-dmabuf-v2 build=%s VulkanHeaders=%u AndroidAPI=%d; DMA-BUF GPU fill/fence/mmap verification; AHB bind-only; no shader/render/throughput benchmark",PROBE_REVISION,VK_HEADER_VERSION,__ANDROID_API__);
     uint32_t loader=VK_API_VERSION_1_0;
     PFN_vkEnumerateInstanceVersion version=(PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(NULL,"vkEnumerateInstanceVersion");
     if(version) version(&loader);
@@ -243,7 +361,7 @@ int main(void) {
         VkDevice dev=VK_NULL_HANDLE; r=vkCreateDevice(pd,&dc,NULL,&dev);
         LOG("DEVICE create result=%d enabledExtensions=%u queueFamily=%u",r,ne,family);
         if(r==VK_SUCCESS) {
-            if(fd && dma) dma_probe(pd,dev,&mp);
+            if(fd && dma) dma_probe(pd,dev,family,&mp);
             if(ahb) ahb_probe(dev,&mp); else RESULT("ahb","UNSUPPORTED AHB/queue_family_foreign extension absent");
             vkDestroyDevice(dev,NULL);
         } else RESULT("device","FAIL create result=%d",r);
