@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -27,6 +27,7 @@ on:
       - 'scripts/*niri_cib_format_support*'
       - 'scripts/*niri_cib_create_diag*'
       - 'scripts/*niri_cib_resource_diag*'
+      - 'scripts/*niri_cib_buffer_trace*'
 
 permissions:
   contents: read
@@ -270,6 +271,8 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_create_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-create-diag-tests.txt
           python3 -I ci/scripts/patch_niri_cib_resource_diag.py source
           python3 -I ci/scripts/test_niri_cib_resource_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-resource-diag-tests.txt
+          python3 -I ci/scripts/patch_niri_cib_buffer_trace.py source
+          python3 -I ci/scripts/test_niri_cib_buffer_trace.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-buffer-trace-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
@@ -277,6 +280,7 @@ jobs:
           cp ci/scripts/*niri_cib_format_support* out/
           cp ci/scripts/*niri_cib_create_diag* out/
           cp ci/scripts/*niri_cib_resource_diag* out/
+          cp ci/scripts/*niri_cib_buffer_trace* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -372,7 +376,8 @@ jobs:
                   "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed",
                   "Add MUTABLE-only BGRA8/RGBA8 default image-support combos so guest classic BGRA8 ColorBuffers can be created before CIB alias; real native AHB query remains authoritative",
                   "Fall back to plain image-format properties when the external query rejects an entry; mark it supported without claiming external memory",
-                  "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only"
+                  "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only",
+                  "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -514,6 +519,17 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_cib_resource_diag.py', 'test_niri_cib_resource_diag.py',
                                           'niri-cib-resource-diag-tests.txt']}
+              },
+              "niri_cib_buffer_trace": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NIRI_IMAGE_TRACE exactly1; process-wide bounded records at Buffer::Impl::create and VkEmulation::setupVkBuffer",
+                  "bound": "At most16 records per log site; each site has its own process-wide atomic budget",
+                  "content": "Buffer entry handle/size/emulationGl/emulationVk, GL-create non-null, BufferVk::create non-null; setupVkBuffer entry handle/size/vulkanOnly/memoryProperty/import/export/default-handle, external-buffer properties query features/flags, vkCreateBuffer result and external-create-info presence, memory requirements size/alignment/bits/typeIndex/dedicated, allocExternalMemory result/memory, vkBindBufferMemory result",
+                  "experiment": "GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL exactly1 suppresses VkExternalMemoryBufferCreateInfo attachment in setupVkBuffer and logs CIB1-DIAG-BUF-VK-EXTERNAL-DISABLED; unset/other values keep the original behavior",
+                  "unchanged": "Default path calls/returns/decisions unchanged; external properties is query-only; no payload or device operation",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_cib_buffer_trace.py', 'test_niri_cib_buffer_trace.py',
+                                          'niri-cib-buffer-trace-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
