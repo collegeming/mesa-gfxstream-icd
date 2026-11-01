@@ -162,7 +162,7 @@ jobs:
           "$RUNNER_TEMP/test-native-backing" | tee out/native-backing-tests.txt
           c++ -std=c++17 -pthread -Wall -Wextra -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            -Ivulkan-headers/include -Isource/common/base/include -Isource/host/common/include \
+            -Ivulkan-headers/include -isystem source/common/base/include -Isource/host/common/include \
             ci/scripts/test_native_backing_manager.cpp source/host/common/external_object_manager.cpp \
             -o "$RUNNER_TEMP/test-native-manager"
           "$RUNNER_TEMP/test-native-manager" | tee -a out/native-backing-tests.txt

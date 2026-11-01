@@ -18,7 +18,10 @@ assert 'nativeDevice->nativeLifetime, device, *pMemory, memoryInfo.size,' in d
 assert 'generation, vk->vkUnmapMemory, vk->vkFreeMemory' in d
 assert 'native::publicationReady() || !info->nativeOwner' in d
 assert 'if (!owner || !owner->generation()) return false;' in m
-assert 'poolOffset < 0 && folioCharge.bytes() == 0 && !createBlobInfoPtr' in d
+assert 'poolOffset < 0 && folioCharge.bytes() == 0 &&' in d
+assert 'native::nativeBlob(createBlobInfoPtr != nullptr,' in d
+assert 'createBlobInfoPtr ? createBlobInfoPtr->blobMem : 0,' in d
+assert 'createBlobInfoPtr ? createBlobInfoPtr->blobFlags : 0);' in d
 assert 'if (info->needUnmap && !m_vkEmulation->getFeatures().ExternalBlob.enabled())' in d
 assert 'if (info->nativeOwner) info->nativeOwner->mapped(info->ptr);' in d
 frontend = read('host/virtio_gpu_frontend.cpp')

@@ -49,6 +49,14 @@ static void lifetimeCase(bool mapped, bool logicalFreeFirst, unsigned resourceCo
 }
 int main() {
     static_assert(!native::publicationReady(), "No paired VMM proof exists");
+    assert(native::nativeBlob(false, 0, 0));
+    assert(native::nativeBlob(true, 2, 1)); // deferred native HOST3D
+    assert(native::nativeBlob(true, 2, 3));
+    assert(!native::nativeBlob(true, 1, 9)); // GUEST imported handle
+    assert(!native::nativeBlob(true, 3, 1)); // HOST3D_GUEST not supported
+    assert(!native::nativeBlob(true, 2, 9)); // CREATE_GUEST_HANDLE never native
+    assert(!native::nativeBlob(true, 2, 5)); // CROSS_DEVICE not supported
+    assert(!native::nativeBlob(true, 2, 0));
     for (bool mapped : {false, true})
         for (bool freeFirst : {false, true})
             for (unsigned count : {0u, 1u, 3u}) lifetimeCase(mapped, freeFirst, count);

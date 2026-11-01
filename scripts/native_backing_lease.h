@@ -105,6 +105,12 @@ inline bool validExtent(const Allocation& owner, uint64_t requested, uint64_t pa
 // No environment variable, callback invocation or CPU test can turn this true.
 inline constexpr bool publicationReady() { return false; }
 
+// Stable virtio blob ABI values: HOST3D=2, MAPPABLE=1, SHAREABLE=2.
+// Guest-handle imports, cross-device and unknown flags are not native backing.
+inline bool nativeBlob(bool hasBlob, uint32_t memory, uint32_t flags) {
+    return !hasBlob || (memory == 2 && (flags & 1) && !(flags & ~uint32_t(3)));
+}
+
 class MapState {
 public:
     bool map(const Allocation& owner, uint64_t requested, uint64_t page) {

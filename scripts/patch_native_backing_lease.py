@@ -91,7 +91,10 @@ edit(decoder, '        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;'
             !m_vkEmulation->getFeatures().ExternalBlob.enabled() &&
             !importEmulatedExternalMemory && !diagnosticFdInfo && !diagnosticAhb &&
             !diagnosticHostPtr && !sharedMemory.has_value() && !privateMemory &&
-            poolOffset < 0 && folioCharge.bytes() == 0 && !createBlobInfoPtr;
+            poolOffset < 0 && folioCharge.bytes() == 0 &&
+            native::nativeBlob(createBlobInfoPtr != nullptr,
+                createBlobInfoPtr ? createBlobInfoPtr->blobMem : 0,
+                createBlobInfoPtr ? createBlobInfoPtr->blobFlags : 0);
         if (nativeAllocation) {
             auto* nativeDevice = gfxstream::base::find(mDeviceInfo, device);
             auto* nativeInstance = nativeDevice ?
