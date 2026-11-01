@@ -57,7 +57,7 @@ edit(d,'''        // Pick by host dispatch-pointer availability; see on_vkGetPhy
         if (vk->vkGetPhysicalDeviceImageFormatProperties2) {''','''        const uint64_t niriQueryRecord = niriImageTraceLocked(physdevInfo->instance);
         if (niriQueryRecord) GFXSTREAM_INFO(
             "NIRI-IMAGE-QUERY-BEGIN: id=%llu phys=%p fmt=%u type=%u tiling=%u usage=0x%x flags=0x%x external=0x%x pNext=%s "
-            "native-fmt=%u native-tiling=%u native-usage=0x%x native-flags=0x%x native-external=0x%x native-pNext=%s", 
+            "native-fmt=%u native-tiling=%u native-usage=0x%x native-flags=0x%x native-external=0x%x native-pNext=%s",
             (unsigned long long)niriQueryRecord, (void*)physicalDevice, niriOriginal.format, niriOriginal.type,
             niriOriginal.tiling, niriOriginal.usage, niriOriginal.flags, niriOriginalHandle,
             niriImagePNext(niriOriginal.pNext).c_str(), pImageFormatInfo->format, pImageFormatInfo->tiling,
