@@ -17,7 +17,10 @@ def block(text, start, end):
 common = read('host/vulkan/vk_common_operations.cpp')
 frontend = read('host/virtio_gpu_frontend.cpp')
 decoder = read('host/vulkan/vk_decoder_global_state.cpp')
-workflow = read('.github/workflows/build-droidvm-mali-host.yml')
+workflow_path = root / '.github/workflows/build-droidvm-mali-host.yml'
+if not workflow_path.is_file():
+    workflow_path = root.parent / '.github/workflows/build-droidvm-mali-host.yml'
+workflow = workflow_path.read_text()
 
 DRIVER = re.compile(r'(?<![A-Za-z0-9_])vk->')
 BOUND = 'diagnostics.fetch_add(1, std::memory_order_relaxed) < 8'

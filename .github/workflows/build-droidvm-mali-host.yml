@@ -250,7 +250,7 @@ jobs:
             "$RUNNER_TEMP/test-niri-image-types.cpp" -o "$RUNNER_TEMP/test-niri-image-types"
           "$RUNNER_TEMP/test-niri-image-types"
 
-      - name: Apply CIB1 host export-only bridge and test paired boundaries
+      - name: Apply CIB1 host export-only bridge, paired boundaries, and bounded diagnostics
         shell: bash
         run: |
           set -euo pipefail
