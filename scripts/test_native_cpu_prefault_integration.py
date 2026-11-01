@@ -15,24 +15,31 @@ assert helper in d
 start = d.index('VkResult vkGetBlobInternal(')
 end = d.index('VkResult on_vkGetBlobGOOGLE(', start)
 blob = d[start:end]
-assert blob.index('vk->vkMapMemory(') < blob.index('info->nativeOwner->mapped(info->ptr)') < blob.index('nativeCpuPrefaultLocked(device, memory, *info, hostBlobId)') < blob.index('ExternalObjectManager::get()->addMapping(')
-assert 'getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_PREFAULT").c_str()' in d
+call = 'nativeCpuPrewriteLocked(device, memory, *info, hostBlobId)'
+assert blob.index('vk->vkMapMemory(') < blob.index('info->nativeOwner->mapped(info->ptr)') < blob.index(call) < blob.index('ExternalObjectManager::get()->addMapping(')
+assert 'getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_PREWRITE").c_str()' in d
+assert 'GFXSTREAM_NATIVE_CPU_PREFAULT' not in d # read-only prefault cannot also operate
 assert 'info.memoryIndex == 8 && physical' in d
 assert 'native::Session::get().ready(owner->epoch())' in d
 assert 'owner->size() == info.size' in d
 assert 'phase=before-publication' in d
-assert helper.count('*static_cast<const volatile uint32_t*>(address)') == 1
+assert helper.count('*static_cast<volatile uint32_t*>(address) = 0x13579bdfu;') == 1
+assert 'const volatile uint32_t' not in helper and 'initial' not in helper
 assert '"dsb sy"' in helper
-for forbidden in ['dc civac', 'dc cvac', 'dc ivac', 'memcpy(', 'memset(', 'volatile uint32_t* first', '*address =']:
+for forbidden in ['dc civac', 'dc cvac', 'dc ivac', 'memcpy(', 'memset(']:
     assert forbidden not in helper
-assert helper.index('valid(guard, address)') < helper.index('budget.consume(app)') < helper.index('beforeRead();') < helper.index('initial = *static_cast')
-assert 'NATIVE-CPU-PREFAULT-BEGIN:' in d
-# Verify actual fully patched vkGetBlobInternal caller lock order, not patch text.
-prefault = blob.index('nativeCpuPrefaultLocked(device, memory, *info, hostBlobId)')
+assert helper.index('valid(guard, address)') < helper.index('budget.consume(app)') < helper.index('beforeStore();') < helper.index('*static_cast<volatile')
+assert 'NATIVE-CPU-PREWRITE-BEGIN:' in d and 'NATIVE-CPU-PREWRITE-END:' in d
+assert '!info.virtioGpuMapped && !info.directMapped && !info.hostmemId' in d
+structs = (after / 'host/vulkan/vk_decoder_internal_structs.h').read_text()
+assert 'bool directMapped = false;' in structs and 'bool virtioGpuMapped = false;' in structs
+assert 'uint64_t hostmemId = 0;' in structs
+assert 'for (const auto& entry : mBufferInfo)' in d and 'for (const auto& entry : mImageInfo)' in d
+prewrite = blob.index(call)
 lifecycle = blob.index('std::lock_guard<std::mutex> nativeLock(native::Session::get().lifecycle);')
-assert prefault < lifecycle # caller acquires L only LATER for publication
-assert blob[:prefault].count('native::Session::get().lifecycle') == 0
-assert 'std::lock_guard<std::mutex> lock(mMutex);' in blob[:prefault]
-method = d[d.index('void nativeCpuPrefaultLocked('):d.index('bool nativeTraceDeviceLocked(')]
+assert prewrite < lifecycle
+assert blob[:prewrite].count('native::Session::get().lifecycle') == 0
+assert 'std::lock_guard<std::mutex> lock(mMutex);' in blob[:prewrite]
+method = d[d.index('void nativeCpuPrewriteLocked('):d.index('bool nativeTraceDeviceLocked(')]
 assert method.count('native::Session::get().lifecycle') == 1
-print('PASS: exactly one optional offset0 read before publication, after owner mapped; two-app one-shot bounds; actual physical type8/coherent/size/epoch guards; original driver calls unchanged; no payload writes or extra cache maintenance')
+print('PASS: exactly one optional offset0 store before publication after owner mapped; no payload reads; prior readonly env disabled; two-app one-shot fresh/unbound/physical/epoch guards; original driver expressions unchanged; BEGIN-store-DSB-END ordering; no extra cache maintenance')
