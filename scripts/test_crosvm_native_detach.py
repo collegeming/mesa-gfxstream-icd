@@ -15,7 +15,16 @@ assert 'self.rutabaga.unmap' not in unref
 unmap = gpu.split('    pub fn resource_unmap_blob(', 1)[1].split('    /// Gets', 1)[0]
 assert 'self.detach_blob_mapping(resource_id)' in unmap
 reset = gpu.split('    pub fn reset(', 1)[1].split('    pub fn snapshot(', 1)[0]
-assert reset.index('self.detach_blob_mapping(id)') < reset.index('self.resources.clear()') < reset.index('self.rutabaga.reset()')
+assert reset.index('self.detach_all_blob_mappings()?') < reset.index('self.resources.clear()') < reset.index('self.rutabaga.reset()')
+worker = (a.source / 'devices/src/virtio/gpu/mod.rs').read_text()
+worker_run = worker.split('    fn run(&mut self) {', 1)[1].split('    fn on_activate', 1)[0]
+assert 'return;' not in worker_run
+assert worker_run.index('if let WorkerStopReason::Kill') < worker_run.index('self.state.virtio_gpu.detach_all_blob_mappings()')
+linux = (a.source / 'src/crosvm/sys/linux.rs').read_text()
+shutdown = linux.split('    // Stop pci root worker thread', 1)[1].split('    // Drop the hotplug manager', 1)[0]
+assert shutdown.index('device_ctrl_tube.send(&DeviceControlCommand::Exit)') < shutdown.index('mem::drop(linux)')
+assert shutdown.index('mem::drop(linux)') < shutdown.index('vm_memory_handler_control.send(&VmMemoryHandlerRequest::Exit)') < shutdown.index('vm_memory_handler_thread.join()')
+assert shutdown.index('irq_handler_thread.join()') < shutdown.index('mem::drop(linux)')
 map_blob = gpu.split('    pub fn resource_map_blob(', 1)[1].split('    /// Shared detach', 1)[0]
 assert map_blob.index('blob_detach::active(') < map_blob.index('self.rutabaga.map(resource_id)')
 assert gpu.split('impl Drop for VirtioGpu', 1)[1].index('blob_detach::active(') < gpu.split('impl Drop for VirtioGpu', 1)[1].index('ManuallyDrop::drop(')

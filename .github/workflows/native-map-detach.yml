@@ -45,10 +45,11 @@ jobs:
         run: |
           set -o pipefail
           cargo +stable test -p devices --no-default-features --features gpu native_detach -- --nocapture 2>&1 | tee "$RUNNER_TEMP/native-detach-tests.log"
+          cargo +stable check -p crosvm --no-default-features --features gpu 2>&1 | tee "$RUNNER_TEMP/native-detach-main-check.log"
       - name: Archive production source and evidence
         if: always()
         run: |
-          tar -C "$RUNNER_TEMP/crosvm" -czf "$RUNNER_TEMP/native-detach-source.tar.gz" devices/src/virtio/gpu/virtio_gpu.rs devices/src/virtio/gpu/blob_detach.rs devices/src/virtio/virtio_pci_device.rs devices/src/virtio/native_detach_requester_tests.rs
+          tar -C "$RUNNER_TEMP/crosvm" -czf "$RUNNER_TEMP/native-detach-source.tar.gz" devices/src/virtio/gpu/virtio_gpu.rs devices/src/virtio/gpu/blob_detach.rs devices/src/virtio/gpu/mod.rs devices/src/virtio/virtio_pci_device.rs devices/src/virtio/native_detach_requester_tests.rs src/crosvm/sys/linux.rs devices/src/virtio/rng.rs devices/src/virtio/block/mod.rs
           sha256sum "$RUNNER_TEMP/native-detach-source.tar.gz" > "$RUNNER_TEMP/native-detach-source.sha256"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -57,5 +58,6 @@ jobs:
           path: |
             ${{ runner.temp }}/native-detach-production.diff
             ${{ runner.temp }}/native-detach-tests.log
+            ${{ runner.temp }}/native-detach-main-check.log
             ${{ runner.temp }}/native-detach-source.tar.gz
             ${{ runner.temp }}/native-detach-source.sha256

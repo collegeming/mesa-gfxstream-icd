@@ -110,12 +110,17 @@ def main():
     }
 
 ''' + s[end:]
-    s = replace(s, '    pub fn reset(&mut self) -> anyhow::Result<()> {', '''    pub fn reset(&mut self) -> anyhow::Result<()> {
+    s = replace(s, '    pub fn reset(&mut self) -> anyhow::Result<()> {', '''    pub(super) fn detach_all_blob_mappings(&mut self) -> anyhow::Result<()> {
         let ids: Vec<u32> = self.resources.keys().copied().collect();
         for id in ids {
             self.detach_blob_mapping(id)
-                .map_err(|e| anyhow::anyhow!("GPU reset blocked by live mapping {}: {:?}", id, e))?;
-        }''')
+                .map_err(|e| anyhow::anyhow!("GPU retirement blocked by live mapping {}: {:?}", id, e))?;
+        }
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> anyhow::Result<()> {
+        self.detach_all_blob_mappings()?;''')
     # Snapshot must not turn quarantined/renderer-only state into a clean remap.
     s = replace(s, '        assert!(self.scanout_data.is_none());', '''        assert!(!self.mapping_quarantined && !self.rutabaga_external_mapping,
             "native mapping snapshot/restore is not negotiated");
@@ -183,6 +188,35 @@ impl Drop for VirtioGpu {
     s += '\n#[cfg(test)]\n#[path = "native_detach_requester_tests.rs"]\nmod native_detach_requester_tests;\n'
     pci.write_text(s)
     shutil.copyfile(Path(__file__).with_name('native_detach_requester_tests.rs'), pci.with_name('native_detach_requester_tests.rs'))
+    worker = root / 'devices/src/virtio/gpu/mod.rs'
+    ws = worker.read_text()
+    ws = replace(ws, '                    info!("virtio gpu worker connection ended, exiting.");\n                    return;', '                    info!("virtio gpu worker connection ended, retiring mappings.");\n                    break;')
+    ws = replace(ws, '''        }
+    }
+
+    fn on_activate(&mut self, request: WorkerActivateRequest)''', '''        }
+        // Both inactive disconnect and active kill retire while the independent
+        // VM-memory handler is still alive. A failed retirement remains quarantined
+        // by VirtioGpu::drop; it is never permission to destroy backing.
+        if let Err(e) = self.state.virtio_gpu.detach_all_blob_mappings() {
+            error!("GPU worker retirement failed; renderer retained: {:#}", e);
+        }
+    }
+
+    fn on_activate(&mut self, request: WorkerActivateRequest)''')
+    worker.write_text(ws)
+    linux = root / 'src/crosvm/sys/linux.rs'
+    ls = linux.read_text()
+    first = ls.index('    // Shut down the VM Memory handler thread.')
+    last = ls.index('    // Shut down the IRQ handler thread.', first)
+    memory_shutdown = ls[first:last]
+    ls = ls[:first] + ls[last:]
+    ls = replace(ls, '    mem::drop(linux);', '''    // Gpu::drop joins its worker, whose retirement needs synchronous VM-memory
+    // acknowledgements. That handler is independent and must outlive device Drop.
+    mem::drop(linux);
+
+''' + memory_shutdown.rstrip())
+    linux.write_text(ls)
     print('Applied production detach patch to', PIN)
 
 if __name__ == '__main__':
