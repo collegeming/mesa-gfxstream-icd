@@ -49,8 +49,8 @@ def main():
 ''', '')
     anchor = '    pub fn resource_map_blob(&mut self, resource_id: u32, offset: u64) -> VirtioGpuResult {\n'
     s = replace(s, anchor, anchor + '''        let resource = self.resources.get(&resource_id).ok_or(ErrInvalidResourceId)?;
-        if resource.shmem_offset.is_some() || resource.rutabaga_external_mapping
-            || resource.mapping_quarantined || resource.pool_offset.is_some() {
+        if blob_detach::active(resource.shmem_offset, resource.rutabaga_external_mapping,
+            resource.mapping_quarantined) || resource.pool_offset.is_some() {
             return Err(ErrUnspec);
         }
 ''')
@@ -127,8 +127,8 @@ def main():
 // explicit detach acknowledgements is a remaining integration requirement, not success.
 impl Drop for VirtioGpu {
     fn drop(&mut self) {
-        if self.resources.values().any(|r| r.shmem_offset.is_some()
-            || r.rutabaga_external_mapping || r.mapping_quarantined) {
+        if self.resources.values().any(|r| blob_detach::active(r.shmem_offset,
+            r.rutabaga_external_mapping, r.mapping_quarantined)) {
             error!("GPU shutdown quarantined: renderer retained; VM detach unproven");
             return;
         }
@@ -143,6 +143,11 @@ impl Drop for VirtioGpu {
     s = pci.read_text()
     s = replace(s, '    mappings: BTreeMap<u64, VmMemoryRegionId>,', '    mappings: BTreeMap<u64, VmMemoryRegionId>,\n    blob_transport_quarantined: bool,')
     s = replace(s, '            mappings: BTreeMap::new(),', '            mappings: BTreeMap::new(),\n            blob_transport_quarantined: false,')
+    s = replace(s, '    ) -> anyhow::Result<()> {\n        if !self.prepared {', '''    ) -> anyhow::Result<()> {
+        if self.blob_transport_quarantined || self.mappings.contains_key(&offset) {
+            return Err(anyhow!("mapping duplicate or blob transport quarantined"));
+        }
+        if !self.prepared {''')
     anchor = '''    ) -> anyhow::Result<Option<u32>> {
         if !self.prepared {'''
     s = replace(s, anchor, '''    ) -> anyhow::Result<Option<u32>> {

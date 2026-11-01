@@ -17,7 +17,8 @@ assert 'self.detach_blob_mapping(resource_id)' in unmap
 reset = gpu.split('    pub fn reset(', 1)[1].split('    pub fn snapshot(', 1)[0]
 assert reset.index('self.detach_blob_mapping(id)') < reset.index('self.resources.clear()') < reset.index('self.rutabaga.reset()')
 map_blob = gpu.split('    pub fn resource_map_blob(', 1)[1].split('    /// Shared detach', 1)[0]
-assert map_blob.index('resource.mapping_quarantined || resource.pool_offset.is_some()') < map_blob.index('self.rutabaga.map(resource_id)')
+assert map_blob.index('blob_detach::active(') < map_blob.index('self.rutabaga.map(resource_id)')
+assert gpu.split('impl Drop for VirtioGpu', 1)[1].index('blob_detach::active(') < gpu.split('impl Drop for VirtioGpu', 1)[1].index('ManuallyDrop::drop(')
 assert map_blob.index('resource.shmem_offset = Some(offset)') < map_blob.index('.add_mapping_blob(')
 assert 'resource.mapping_quarantined = true' in map_blob
 assert 'impl Drop for VirtioGpu' in gpu and 'ManuallyDrop::drop(&mut self.rutabaga)' in gpu

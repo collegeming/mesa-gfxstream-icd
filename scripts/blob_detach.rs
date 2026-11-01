@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+/// Pending renderer cleanup and unknown registration outcomes are also active leases.
+pub(super) fn active(offset: Option<u64>, renderer_mapped: bool, quarantined: bool) -> bool {
+    offset.is_some() || renderer_mapped || quarantined
+}
+
 /// Production detach ordering, shared by virtio-gpu UNMAP, UNREF and reset.
 /// No renderer operation may run when the registration outcome is unknown.
 pub(super) fn detach<E>(
@@ -30,6 +35,19 @@ pub(super) fn detach<E>(
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn native_detach_map_and_shutdown_gate_all_live_states() {
+        assert!(!active(None, false, false));
+        for offset in [None, Some(64)] {
+            for mapped in [false, true] {
+                for quarantined in [false, true] {
+                    assert_eq!(active(offset, mapped, quarantined),
+                        offset.is_some() || mapped || quarantined);
+                }
+            }
+        }
+    }
 
     #[test]
     fn native_detach_ack_precedes_renderer() {

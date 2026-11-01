@@ -60,6 +60,36 @@ fn native_detach_requester_register_reply_loss_blocks_remap() {
 }
 
 #[test]
+fn native_detach_requester_rejected_map_is_not_false_rollback_proof() {
+    let (mut requester, server) = requester();
+    let worker = std::thread::spawn(move || {
+        server.recv::<VmMemoryRequest>().unwrap();
+        server.send(&VmMemoryResponse::Err(base::Error::new(libc::EINVAL))).unwrap();
+    });
+    assert!(requester.add_mapping_blob(VmMemorySource::ExternalMapping { ptr: 0, size: 4096 },
+        64, Protection::read_write(), MemCacheType::CacheCoherent, VmAccept::Sync).is_err());
+    assert!(requester.blob_transport_quarantined);
+    // This pin ignores some registration rollback errors. Even a server Err is
+    // insufficient evidence to release raw backing or to reuse the request stream.
+    assert!(requester.add_mapping(VmMemorySource::ExternalMapping { ptr: 0, size: 4096 },
+        128, Protection::read_write(), MemCacheType::CacheCoherent).is_err());
+    worker.join().unwrap();
+}
+
+#[test]
+fn native_detach_requester_prepare_reply_loss_quarantines_tube() {
+    let (mut requester, server) = requester();
+    requester.prepare_type = SharedMemoryPrepareType::SingleMappingOnFirst(MemCacheType::CacheCoherent);
+    let worker = std::thread::spawn(move || {
+        assert!(matches!(server.recv::<VmMemoryRequest>().unwrap(), VmMemoryRequest::PrepareSharedMemoryRegion { .. }));
+    });
+    assert!(requester.add_mapping_blob(VmMemorySource::ExternalMapping { ptr: 0, size: 4096 },
+        64, Protection::read_write(), MemCacheType::CacheCoherent, VmAccept::Sync).is_err());
+    assert!(requester.blob_transport_quarantined);
+    worker.join().unwrap();
+}
+
+#[test]
 fn native_detach_requester_duplicate_offset_never_sends() {
     let (mut requester, _server) = requester();
     requester.mappings.insert(64, VmMemoryRegionId::from_guest_addr(vm_memory::GuestAddress(0x10000)));
