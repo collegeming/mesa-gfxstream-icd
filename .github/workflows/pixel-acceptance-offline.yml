@@ -1,0 +1,54 @@
+name: pixel-acceptance-offline
+
+on:
+  push:
+    branches: [diagnostic/pixel-acceptance-v2]
+    paths:
+      - diagnostic/**
+      - tests/test_guest_offscreen_acceptance.py
+      - .github/workflows/pixel-acceptance-offline.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and production-helper tests (CPU fakes only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 -I tests/test_guest_offscreen_acceptance.py --evidence evidence/cpu-tests.json 2>&1 | tee evidence/cpu-tests.log
+      - name: Same checks with Python optimization enabled
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -O tests/test_guest_offscreen_acceptance.py --evidence evidence/cpu-tests-optimized.json 2>&1 | tee evidence/cpu-tests-optimized.log
+      - name: Package source and offline evidence (never a graphics binary execution)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\nGPU_EXECUTION=false\nDEVICE_EXECUTION=false\nHARDWARE_ACCEPTANCE=UNACHIEVED\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/provenance.txt
+          sha256sum diagnostic/guest_offscreen_acceptance.py diagnostic/README.md tests/test_guest_offscreen_acceptance.py .github/workflows/pixel-acceptance-offline.yml > evidence/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: pixel-acceptance-offline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            diagnostic/guest_offscreen_acceptance.py
+            diagnostic/README.md
+            tests/test_guest_offscreen_acceptance.py
+            .github/workflows/pixel-acceptance-offline.yml
+            evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
