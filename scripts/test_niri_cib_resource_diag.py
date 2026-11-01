@@ -40,6 +40,8 @@ for token in ['handle=%u target=%u format=%u bind=0x%x', 'width=%u height=%u dep
     assert token in create, token
 assert 'auto resourceOpt = VirtioGpuResource::Create(args, iov, num_iovs);' in create
 assert 'mResources[args->handle] = std::move(*resourceOpt);' in create
+assert 'std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);' in create
+assert 'if (mNativeRetiring) return -EBUSY;' in create
 assert create.count('argsDiagnostics.fetch_add(1, std::memory_order_relaxed) < 16') == 1
 assert create.count('resultDiagnostics.fetch_add(1, std::memory_order_relaxed) < 16') == 1
 assert 'GFXSTREAM_ERROR("Failed to create resource %u.", args->handle);' in create
@@ -53,6 +55,7 @@ assert attach.count('diagnostics.fetch_add(1, std::memory_order_relaxed) < 16') 
 assert 'failed to attach resource %u to context %u: context not found.' in attach
 assert 'failed to attach resource %u to context %u: resource not found.' in attach
 assert 'context.AttachResource(resource);' in attach
+assert 'std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);' in attach
 
 branch_start = resource.index('    } else if (resourceType == VirtioGpuResourceType::COLOR_BUFFER) {\n        const char* trace')
 branch_end = resource.index('        FrameBuffer::getFB()->setGuestManagedColorBufferLifetime', branch_start)

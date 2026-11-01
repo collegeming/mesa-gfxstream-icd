@@ -15,6 +15,8 @@ def edit(rel, old, new):
 frontend = 'host/virtio_gpu_frontend.cpp'
 edit(frontend, '''int VirtioGpuFrontend::createResource(struct stream_renderer_resource_create_args* args,
                                       struct iovec* iov, uint32_t num_iovs) {
+    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
+    if (mNativeRetiring) return -EBUSY;
     auto resourceOpt = VirtioGpuResource::Create(args, iov, num_iovs);
     if (!resourceOpt) {
         GFXSTREAM_ERROR("Failed to create resource %u.", args->handle);
@@ -24,6 +26,8 @@ edit(frontend, '''int VirtioGpuFrontend::createResource(struct stream_renderer_r
     return 0;
 }''', '''int VirtioGpuFrontend::createResource(struct stream_renderer_resource_create_args* args,
                                       struct iovec* iov, uint32_t num_iovs) {
+    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
+    if (mNativeRetiring) return -EBUSY;
     const bool diag = gfxstream::base::getEnvironmentVariable("GFXSTREAM_NIRI_IMAGE_TRACE") == "1";
     if (diag) {
         static std::atomic<uint32_t> argsDiagnostics{0};
@@ -59,6 +63,7 @@ edit(frontend, '''int VirtioGpuFrontend::createResource(struct stream_renderer_r
 }''')
 
 edit(frontend, '''void VirtioGpuFrontend::attachResource(uint32_t contextId, uint32_t resourceId) {
+    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
     D("ctxid: %u resid: %u", contextId, resourceId);
 
     auto contextIt = mContexts.find(contextId);
@@ -79,6 +84,7 @@ edit(frontend, '''void VirtioGpuFrontend::attachResource(uint32_t contextId, uin
 
     context.AttachResource(resource);
 }''', '''void VirtioGpuFrontend::attachResource(uint32_t contextId, uint32_t resourceId) {
+    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
     D("ctxid: %u resid: %u", contextId, resourceId);
 
     auto contextIt = mContexts.find(contextId);
