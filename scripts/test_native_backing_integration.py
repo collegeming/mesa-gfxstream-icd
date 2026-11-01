@@ -35,6 +35,8 @@ renderer = read('host/virtio_gpu_gfxstream_renderer.cpp')
 assert 'if (!nativeOffer.parse(param.key, param.value)) return -EINVAL;' in renderer
 assert renderer.index('const int initRes = sFrontend()->init(') < renderer.index('nativeInitialization.success(nativeOffer)')
 assert 'return sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);' in renderer
+assert 'NATIVE-LEASE-CONTRACT: version=1 accepted=0x%llx epoch=%llu native-host3d-only' in renderer
+assert 'NATIVE-LEASE-MAP-REJECT: res=%u owner=%d epoch-current=%d active=%d extent-valid=%d' in r
 assert 'const auto destroy = deviceDispatch->vkDestroyDevice;' in d
 assert 'const auto destroy = dispatch->vkDestroyInstance;' in d
 assert '[device, destroy, boxed]' in d and 'debugContext]' in d

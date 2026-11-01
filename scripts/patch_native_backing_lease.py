@@ -253,6 +253,11 @@ edit(resource, '''        hva = memory.addr;
             !mNativeMapState.map(*memory.owner, mCreateBlobArgs->size, page)) {
             if (outAddress) *outAddress = nullptr;
             if (outSize) *outSize = 0;
+            GFXSTREAM_ERROR("NATIVE-LEASE-MAP-REJECT: res=%u owner=%d epoch-current=%d active=%d extent-valid=%d",
+                mId, memory.owner != nullptr,
+                memory.owner && native::Session::get().ready(memory.owner->epoch()),
+                mNativeMapState.active(),
+                memory.owner && page > 0 && native::validExtent(*memory.owner, mCreateBlobArgs->size, page));
             return -EINVAL;
         }
         hva = memory.owner->address();
@@ -352,6 +357,9 @@ edit(renderer, '''        switch (param.key) {
                 break;
             case STREAM_RENDERER_PARAM_NULL:''')
 edit(renderer, '''    GFXSTREAM_INFO("Gfxstream initialized successfully!");''', '''    nativeInitialization.success(nativeOffer); // accepted written last, only on real init success
+    GFXSTREAM_INFO("NATIVE-LEASE-CONTRACT: version=1 accepted=0x%llx epoch=%llu native-host3d-only",
+        nativeOffer.valid() ? (unsigned long long)gfxstream::host::native::kDetachMask : 0ULL,
+        nativeOffer.valid() ? (unsigned long long)gfxstream::host::native::Session::get().epoch() : 0ULL);
     GFXSTREAM_INFO("Gfxstream initialized successfully!");''')
 edit(renderer, '''    sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);
     return 0;''', '''    return sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);''')
