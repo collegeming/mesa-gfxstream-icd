@@ -34,6 +34,10 @@ def main():
     if count != 24:
         raise RuntimeError(f'baseline block-test literal count changed: {count}')
     block.write_text(before + '#[cfg(test)]\nmod tests {' + tests)
+    helpers = root / 'src/crosvm/sys/linux/device_helpers.rs'
+    helpers.write_text(replace(helpers.read_text(), 'fn create_unprivileged_virtio_snd_device(', '#[cfg(feature = "audio")]\nfn create_unprivileged_virtio_snd_device('))
+    main_rs = root / 'src/main.rs'
+    main_rs.write_text(replace(main_rs.read_text(), 'fn exit_without_crash_dump(sig: c_int)', 'fn exit_without_crash_dump(sig: libc::c_int)'))
     gpu = root / 'devices/src/virtio/gpu/virtio_gpu.rs'
     s = gpu.read_text()
     s = replace(s, 'struct VirtioGpuResource {', '#[path = "blob_detach.rs"]\nmod blob_detach;\n\nstruct VirtioGpuResource {')
