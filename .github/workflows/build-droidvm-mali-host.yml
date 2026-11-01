@@ -3,13 +3,15 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
       - 'scripts/patch_droidvm_mali_host.py'
       - 'scripts/dmabuf_import_guard.h'
       - 'scripts/test_dmabuf_import_guard.cpp'
+      - 'scripts/staging_contract.h'
+      - 'scripts/test_staging_contract.cpp'
 
 permissions:
   contents: read
@@ -29,13 +31,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CI scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           path: ci
           persist-credentials: false
 
       - name: Checkout pinned DroidVM gfxstream
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: collegeming/gfxstream-1
           ref: ${{ env.GFXSTREAM_COMMIT }}
@@ -43,7 +45,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout pinned Vulkan-Headers 1.4.358
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: KhronosGroup/Vulkan-Headers
           ref: ${{ env.VULKAN_HEADERS_COMMIT }}
@@ -69,6 +71,7 @@ jobs:
           cp ci/scripts/patch_droidvm_build.py ci/scripts/patch_droidvm_mali_host.py out/
           cp ci/.github/workflows/build-droidvm-mali-host.yml out/
           cp ci/scripts/dmabuf_import_guard.h ci/scripts/test_dmabuf_import_guard.cpp out/
+          cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -95,6 +98,35 @@ jobs:
           print('PASS: both DMA_BUF device lists request KHR_external_memory_fd through supported-extension gates')
           PY
 
+      - name: Run shared production staging contract tests (CPU mocks only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer             -Ivulkan-headers/include -Ici/scripts             ci/scripts/test_staging_contract.cpp -o "$RUNNER_TEMP/test-staging-contract"
+          "$RUNNER_TEMP/test-staging-contract" | tee out/staging-contract-tests.txt
+          "$RUNNER_TEMP/test-staging-contract" --destroy-inflight
+          printf 'PASS: in-flight C++ destruction rejected by lifetime invariant
+' | tee -a out/staging-contract-tests.txt
+          python3 -I - <<'PY_CHECK' | tee -a out/staging-contract-tests.txt
+          from pathlib import Path
+          decoder = Path('source/host/vulkan/vk_decoder_global_state.cpp').read_text()
+          helper = Path('ci/scripts/staging_contract.h').read_text().replace('#pragma once
+', '')
+          assert helper in decoder
+          start = decoder.index('    VkResult on_vkAllocateMemory(')
+          end = decoder.index('        VkResult result = vk->vkAllocateMemory(', start)
+          allocation = decoder[start:end]
+          gate = allocation.index('"GFXSTREAM_EXPERIMENTAL_STAGING_CONTRACT") == "1"')
+          assert gate < allocation.index('HostVisibleFolioCharge folioCharge;')
+          assert gate < allocation.index('validateHostVisibleDmaBufImport(')
+          assert 'staging::Readiness readiness{};' in allocation
+          assert 'readiness.directMapping = usingDirectMapping();' in allocation
+          assert '(guestMemoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0' in allocation
+          assert 'readiness.callbacks =' not in allocation
+          assert 'DMA_BUF_IOCTL_SYNC' not in helper
+          print('PASS: production embeds exact tested helper, unnegotiated gate precedes backing acquisition; default fd guard retained')
+          PY_CHECK
+
       - name: Fetch Android NDK r27c
         shell: bash
         run: |
@@ -102,6 +134,8 @@ jobs:
           mkdir "$RUNNER_TEMP/droidvm-ndk-download" "$RUNNER_TEMP/droidvm-ndk-extract"
           curl --fail --location --retry 3 -o "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" \
             https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          printf '%s  %s
+' '090e8083a715fdb1a3e402d0763c388abb03fb4e' "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | sha1sum -c -
           sha256sum "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | cut -d ' ' -f 1 > out/ndk-archive.sha256
           unzip -q "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" -d "$RUNNER_TEMP/droidvm-ndk-extract"
           printf 'ANDROID_NDK_HOME=%s/droidvm-ndk-extract/android-ndk-r27c\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -178,12 +212,21 @@ jobs:
                   "Log image transform external types, decoder allocation provenance, and image/memory state before driver bind calls",
                   "Reject zero-size non-AHB allocations before driver calls and zero-size non-AHB memory binds to AHB images in both bind entry points",
                   "Validate actual host-visible DMA_BUF fd memoryTypeBits; reject incompatible index without changing coherency; close rejected fd and release pool reservation",
-                  "Enable supported KHR_external_memory_fd alongside DMA_BUF on decoder and internal devices; bounded device/dispatch and successful-query diagnostics"
+                  "Enable supported KHR_external_memory_fd alongside DMA_BUF on decoder and internal devices; bounded device/dispatch and successful-query diagnostics",
+                  "Default-disabled staging contract readiness gate rejects opt-in emulated guest-coherent allocations until paired backend/guest negotiation exists; no memory flag rewrite",
+                  "Shared bounded identity/range/epoch state machine embedded in production; transfer callbacks exercised only by CPU mocks"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
               "source_patch": "gfxstream-android-mali.patch (excludes separately pinned Vulkan-Headers replacement)",
-              "validation": "GitHub Actions cross-build and ELF inspection only; no device/runtime test"
+              "staging_contract": {
+                  "default_enabled": False,
+                  "environment_opt_in": "GFXSTREAM_EXPERIMENTAL_STAGING_CONTRACT=1 enables rejection only",
+                  "production_ready": False,
+                  "missing": ["paired guest/host protocol negotiation and backing identities", "real upload+flush and download+invalidate callbacks", "submission and cross-queue/timeline/fence/idle/local-sync-fd completion coverage", "persistent guest mapping/read/write interception and lifetime wiring"],
+                  "gpu_callbacks": "CPU mocks only, NOT real GPU/backend integration"
+              },
+              "validation": "GitHub Actions native no-GPU mock tests with ASan/UBSan, Android NDK cross-build and ELF inspection; no device/runtime coherent validation"
           }
           assert provenance["ci_commit"] == provenance["ci_checkout_commit"]
           Path("out/provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
@@ -193,7 +236,7 @@ jobs:
           printf 'Artifact includes the library, complete non-header source patch, patch scripts, workflow, provenance, and SHA256SUMS. No runtime/device validation was performed.\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload DroidVM Mali host
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: droidvm-mali-host-android33-arm64-cbc6df3b-${{ github.sha }}
           path: out/

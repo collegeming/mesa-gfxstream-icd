@@ -764,6 +764,59 @@ edit(
         }''',
 )
 
+# Production uses exactly the contract tested by native CI. Embed in the tracked
+# decoder TU so the generated source patch contains the entire helper.
+staging_header = (Path(__file__).resolve().parent / "staging_contract.h").read_text(encoding="utf-8")
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '#include "vk_decoder_global_state.h"',
+    '#include "vk_decoder_global_state.h"\n' + staging_header.replace("#pragma once\n", ""),
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "        VkMemoryPropertyFlags memoryPropertyFlags;",
+    "        VkMemoryPropertyFlags memoryPropertyFlags;\n        VkMemoryPropertyFlags guestMemoryPropertyFlags = 0;",
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "            const auto& hostMemoryInfo = *hostMemoryInfoOpt;",
+    '''            const auto& guestProperties =
+                physicalDeviceInfo->memoryPropertiesHelper->getGuestMemoryProperties();
+            if (pAllocateInfo->memoryTypeIndex >= guestProperties.memoryTypeCount) {
+                return VK_ERROR_INCOMPATIBLE_DRIVER;
+            }
+            guestMemoryPropertyFlags =
+                guestProperties.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags;
+            const auto& hostMemoryInfo = *hostMemoryInfoOpt;''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "        const bool emulateHostVisible = hostVisible && !importEmulatedExternalMemory;",
+    '''        const bool emulateHostVisible = hostVisible && !importEmulatedExternalMemory;
+
+        // OFF by default. No paired wire protocol or real backend exists yet.
+        // Environment opt-in enables rejection, NOT a staging/coherent bypass.
+        // This gate precedes owned fd acquisition and pool reservation below.
+        if (gfxstream::base::getEnvironmentVariable(
+                "GFXSTREAM_EXPERIMENTAL_STAGING_CONTRACT") == "1") {
+            staging::Readiness readiness{}; // Intentionally no negotiation/callbacks.
+            readiness.directMapping = usingDirectMapping();
+            const char* reason = "unavailable";
+            const VkResult gate = staging::allocationGate(
+                true, emulateHostVisible,
+                (guestMemoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0,
+                readiness, &reason);
+            if (gate != VK_SUCCESS) {
+                GFXSTREAM_ERROR(
+                    "STAGING-CONTRACT-REJECT: %s; paired guest/backend upload-flush, "
+                    "completion and download-invalidate not wired; no coherent rewrite result=%d",
+                    reason, (int)gate);
+                *pMemory = VK_NULL_HANDLE;
+                return gate;
+            }
+        }''',
+)
+
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.
 platform_default = (root / "host/vulkan/external_memory.cpp").read_text(encoding="utf-8")
 if """#elif defined(__ANDROID__)
