@@ -21,6 +21,11 @@ q=s[s.index('VkResult on_vkGetPhysicalDeviceImageFormatProperties2('):s.index('/
 assert q.index('NIRI-IMAGE-QUERY-BEGIN:') < q.index('vk->vkGetPhysicalDeviceImageFormatProperties2(') < q.index('NIRI-IMAGE-QUERY-END:')
 assert q.index('NIRI-IMAGE-QUERY-END:') < q.index('VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT')
 assert 'native-pNext=%s' in q
+wire = s[s.index('void traceNiriImageQueryInput('):s.index('static std::string niriImagePNext(')]
+assert wire.index('if (!ext || !ext->handleType) return;') < wire.index('niriImageTraceLocked(info->instance)')
+assert 'niriOriginalHandle ? niriImageTraceLocked(physdevInfo->instance) : 0' in q
+assert 'niriExternal && niriExternal->handleTypes ? niriDeviceImageTraceLocked(device) : 0' in s
+assert s.count('niriImage && niriImage->diagnosticExternalHandleTypes ? niriDeviceImageTraceLocked(device) : 0') == 2
 # No extra driver calls, modifications of types/ranges/flags, or mapped payload accesses in this patch.
 patch=Path(__file__).with_name('patch_niri_image_query_trace.py').read_text()
 for forbidden in ['vkAllocateMemory(', 'vkMapMemory(', 'memcpy(', 'memset(', 'volatile uint32_t', 'info->ptr', 'nativeOwner->address()']:
