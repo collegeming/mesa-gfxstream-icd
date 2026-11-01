@@ -46,7 +46,9 @@ assert allocation.count('vk_append_struct(&structChainIter, &importFdInfo);') ==
 system = allocation[allocation.index('} else if (m_vkEmulation->getFeatures().SystemBlob.enabled())'):]
 system = system[:system.index('sharedMemory = std::make_optional')]
 assert 'importFdInfo.fd =' not in system and 'poolOffset =' not in system
-private = allocation[allocation.index('} else if (m_vkEmulation->getFeatures().VulkanAllocateHostMemory.enabled()'):guard]
+private_start = allocation.index('} else if (m_vkEmulation->getFeatures().VulkanAllocateHostMemory.enabled()')
+private_end = allocation.index('vk_append_struct(&structChainIter, &importHostInfo);', private_start)
+private = allocation[private_start:private_end]
 assert 'importFdInfo.fd =' not in private and 'poolOffset =' not in private
 assert 'if (poolOffset < 0) {' in allocation
 assert 'poolEligible =\n                    udmabufEnabled' in allocation
