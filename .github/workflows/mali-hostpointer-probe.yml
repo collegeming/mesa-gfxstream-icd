@@ -1,0 +1,60 @@
+name: mali-hostpointer-only-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/mali-dmabuf-probe]
+    paths:
+      - 'diagnostic/mali_hostpointer_probe.c'
+      - '.github/workflows/mali-hostpointer-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64-hostpointer-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select or install pinned NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -f "$NDK/source.properties" ]; then
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.2.12479018'
+          fi
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
+      - name: Build hostpointer-only binary, never run any probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir out
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          {
+            printf 'commit=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            cat "$NDK/source.properties"
+            "$CC" --version
+            printf 'target=android-arm64-api33; mode=hostpointer-only; CI compiles only; no device operations\n'
+          } | tee out/build-info.txt
+          "$CC" -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" \
+            diagnostic/mali_hostpointer_probe.c -o out/mali_hostpointer_probe -lvulkan \
+            2>&1 | tee out/compiler.log
+          cp diagnostic/mali_hostpointer_probe.c out/
+          file out/mali_hostpointer_probe | tee out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h -d out/mali_hostpointer_probe | tee -a out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --undefined-only out/mali_hostpointer_probe | tee out/imported-symbols.txt
+          if grep -E 'vk(GetDeviceQueue|Queue|Cmd|CreateBuffer|CreateImage|Bind|MapMemory|UnmapMemory|CreateShader|Create.*Pipeline|AllocateCommand|CreateCommand|WaitForFences|DeviceWaitIdle)' out/imported-symbols.txt; then
+            printf 'Forbidden GPU/bind/map symbol found\n' >&2
+            exit 1
+          fi
+          (cd out && sha256sum mali_hostpointer_probe mali_hostpointer_probe.c build-info.txt binary-info.txt compiler.log imported-symbols.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mali-hostpointer-only-android-arm64-api33
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
