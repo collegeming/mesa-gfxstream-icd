@@ -70,7 +70,7 @@ void ExternalObjectManager::revokeMappings(uint64_t generation) {
     }
     // Final owner releases are outside the manager lock; destructors only enqueue.
 }''')
-edit(manager_h, '#include <utility>', '#include <utility>\n#include <vector>')
+edit(manager_h, '#include <unordered_map>', '#include <unordered_map>\n#include <vector>')
 edit(manager, '        std::optional<HostMemInfo> ret = found->second;', '        std::optional<HostMemInfo> ret = std::move(found->second);')
 edit(manager, '''void ExternalObjectManager::removeContextBlobDescriptorInfos(uint32_t ctxId) {
     std::lock_guard<std::mutex> lock(mMutex);''', '''void ExternalObjectManager::removeContextBlobDescriptorInfos(uint32_t ctxId) {
