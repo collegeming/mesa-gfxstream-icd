@@ -136,14 +136,18 @@ public:
         return true;
     }
     uint64_t epoch() const { return mEpoch.load(); }
-    void commit() { mReady.store(true); }
+    void commit() { mNativeNegotiated = true; mReady.store(true); }
+    bool snapshotBlocked() const {
+        return mNativeNegotiated || mAllocations.load() || !Reclaimer::get().idle();
+    }
     void revoke() { mReady.store(false); }
-    void stopped() { mReady.store(false); mInitialized = false; }
+    void stopped() { mReady.store(false); mInitialized = false; mNativeNegotiated = false; }
     bool ready(uint64_t epoch) const { return epoch && mReady.load() && epoch == mEpoch.load(); }
     void allocated() { mAllocations.fetch_add(1); }
     void freed() { mAllocations.fetch_sub(1); }
 private:
     bool mInitialized = false; // lifecycle lock
+    bool mNativeNegotiated = false; // remains true after reset revocation until full stop
     std::atomic<uint64_t> mEpoch{0};
     std::atomic<uint64_t> mAllocations{0};
     std::atomic<bool> mReady{false};

@@ -425,6 +425,8 @@ edit(frontend, '''int VirtioGpuFrontend::snapshot(const char* directory) {
         if (resource.HasNativeBacking()) return -EBUSY;
     }''', '''int VirtioGpuFrontend::snapshot(const char* directory) {
     { std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
+      std::lock_guard<std::mutex> lifecycleLock(native::Session::get().lifecycle);
+      if (native::Session::get().snapshotBlocked()) return -EBUSY;
       for (const auto& [id, resource] : mResources) {
         if (resource.HasNativeBacking()) return -EBUSY;
       }
