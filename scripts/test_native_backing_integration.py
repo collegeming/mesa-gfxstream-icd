@@ -49,5 +49,18 @@ for marker in ['STREAM_HANDLE_TYPE_MEM_POOL', 'STREAM_HANDLE_TYPE_MEM_SHM',
                'exportMemoryHandle(deviceInfo, vk, device, memory)',
                'validateHostPointerImport(', 'validateHostVisibleDmaBufImport(']:
     assert marker in d
-print('PASS: production owner propagation, device/instance finalizers, all-generation revocation, retained unmap/remap, fail-closed raw native/imported paths; descriptor paths retained')
+assert 'native::quarantine(std::move(std::get<ExternalMemoryMapping>(*mBlobMemory).owner))' in r
+assert 'VirtioGpuResource::~VirtioGpuResource()' in r
+assert 'this->~VirtioGpuResource();' in r
+assert 'Native reset rejected: resource %u still mapped' in frontend
+assert 'if (destroyVirtioGpuObjects() != 0) return;' in frontend
+assert 'int ret = destroyVirtioGpuObjects();\n    if (ret) return ret;' in frontend
+assert frontend.index('mRenderer->stop(/*wait*/ true);') < frontend.index('native::Reclaimer::get().drain();')
+assert 'if (resource.HasActiveNativeMap()) return -EBUSY;' in frontend
+loader = read('host/vulkan/vulkan_dispatch.cpp')
+assert 'static VulkanDispatchImpl* impl = new VulkanDispatchImpl;' in loader
+assert 'std::vector<SharedLibrary*> mLibs;' in loader
+assert '~SharedLibraries() = default;' in loader
+assert 'dlclose(' not in loader
+print('PASS: production owner propagation, device/instance finalizers, all-generation revocation, retained unmap/remap, reset rejection, forced drop quarantine, post-stop drain, fail-closed raw native/imported paths; descriptor paths retained')
 print('BLOCKERS: no negotiated VMM identity/ack/quarantine contract; device child teardown still synchronous outside mMutex; no guest/PFN/cache/GPU validation')

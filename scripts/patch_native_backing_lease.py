@@ -263,4 +263,59 @@ edit('host/virtio_gpu_frontend.cpp', '    resource.Destroy();', '''    if (resou
         GFXSTREAM_ERROR("Native resource still active: retaining resource %u", resourceId);
         return; // Never erase a resource whose destroy rejected active mapping.
     }''')
+# Forced clear/drop cannot silently release a possibly KVM-visible native lease.
+edit(resource_h, '    VirtioGpuResource() {}', '''    VirtioGpuResource() {}
+    ~VirtioGpuResource();
+    VirtioGpuResource(const VirtioGpuResource&) = delete;
+    VirtioGpuResource& operator=(const VirtioGpuResource&) = delete;
+    VirtioGpuResource(VirtioGpuResource&&) noexcept = default;
+    VirtioGpuResource& operator=(VirtioGpuResource&& other) noexcept;
+    bool HasActiveNativeMap() const { return mNativeMapState.active(); }''')
+edit(resource, 'int VirtioGpuResource::Destroy() {', '''VirtioGpuResource::~VirtioGpuResource() {
+    if (mNativeMapState.active() && mBlobMemory &&
+        std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory)) {
+        native::quarantine(std::move(std::get<ExternalMemoryMapping>(*mBlobMemory).owner));
+    }
+}
+
+VirtioGpuResource& VirtioGpuResource::operator=(VirtioGpuResource&& other) noexcept {
+    if (this != &other) {
+        this->~VirtioGpuResource(); // quarantine active destination, never silently release
+        new (this) VirtioGpuResource(std::move(other));
+    }
+    return *this;
+}
+
+int VirtioGpuResource::Destroy() {''')
+edit(resource, '#include <unistd.h>', '#include <unistd.h>\n#include <new>')
+edit('host/virtio_gpu_frontend.cpp', '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    {''', '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    for (const auto& [id, resource] : mResources) {
+        if (resource.HasActiveNativeMap()) {
+            GFXSTREAM_ERROR("Native reset rejected: resource %u still mapped", id);
+            return -EBUSY; // preserve resources AND contexts, no fake successful reset
+        }
+    }
+    {''')
+edit('host/virtio_gpu_frontend.cpp', '''void VirtioGpuFrontend::teardown() {
+    destroyVirtioGpuObjects();''', '''void VirtioGpuFrontend::teardown() {
+    if (destroyVirtioGpuObjects() != 0) return;''')
+edit('host/virtio_gpu_frontend.cpp', '''        mRenderer.reset();
+    }
+}''', '''        mRenderer.reset();
+    }
+    native::Reclaimer::get().drain(); // producers stopped; no decoder/manager locks
+}''')
+edit('host/virtio_gpu_frontend.cpp', '''    mContexts.clear();
+    mResources.clear();''', '''    for (const auto& [id, resource] : mResources) {
+        if (resource.HasActiveNativeMap()) return -EBUSY;
+    }
+    mContexts.clear();
+    mResources.clear();''')
+edit('host/virtio_gpu_frontend.cpp', '''    destroyVirtioGpuObjects();
+
+    int ret = restoreRenderer(directory);''', '''    int ret = destroyVirtioGpuObjects();
+    if (ret) return ret;
+
+    ret = restoreRenderer(directory);''')
 print('Applied native allocation ownership; raw publication intentionally fail-closed')

@@ -1,5 +1,6 @@
 #include "native_backing_lease.h"
 #include <cassert>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <iostream>
@@ -80,5 +81,25 @@ int main() {
     assert(!native::validExtent(*owner, 8192, 4096));
     owner.reset(); device.reset();
     assert(finished.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
-    std::cout << "PASS: shared production Allocation/MapState/Lifetime; 12 free/map/resource orderings, multiple owners, never-mapped free, unmap/remap, device-instance retirement, overflow/alignment; readiness false\n";
+    native::Reclaimer::get().drain();
+    // drain includes callbacks posted by callbacks, not just a FIFO sentinel.
+    std::atomic<unsigned> drained{0};
+    native::Reclaimer::get().post([&drained] {
+        native::Reclaimer::get().post([&drained] { drained.fetch_add(1); });
+        drained.fetch_add(1);
+    });
+    native::Reclaimer::get().drain();
+    assert(drained.load() == 2);
+    auto held = std::make_shared<native::Allocation>(nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                                   4096, 100, unmap, freeMemory);
+    held->mapped(reinterpret_cast<void*>(uintptr_t(0x10000)));
+    native::MapState active;
+    assert(active.map(*held, 4096, 4096));
+    native::MapState moved(std::move(active));
+    assert(!active.active() && moved.active());
+    std::weak_ptr<native::Allocation> quarantined = held;
+    native::quarantine(std::move(held));
+    native::Reclaimer::get().drain();
+    assert(!quarantined.expired()); // forced drop without detach never frees backing
+    std::cout << "PASS: shared production Allocation/MapState/Lifetime; 12 free/map/resource orderings, multiple owners, never-mapped free, unmap/remap, device-instance retirement, overflow/alignment, nested drain and forced-drop quarantine; readiness false\n";
 }
