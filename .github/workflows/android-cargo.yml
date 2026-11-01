@@ -133,6 +133,11 @@ jobs:
           assert s.count(old) == 1
           s = s.replace(old, '        #[cfg(not(feature = "gunyah"))]\n        if shares_guest_ram {\n            return Err(Error::Unsupported);\n        }\n        #[cfg(not(feature = "gunyah"))]\n        let entry = payload.entry();\n        #[cfg(feature = "gunyah")]\n' + old)
           p.write_text(s)
+          p = Path('source/src/crosvm/sys/linux/device_helpers.rs')
+          s = p.read_text()
+          old = 'pub fn create_unprivileged_virtio_snd_device('
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, '#[cfg(feature = "audio")]\n' + old))
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
