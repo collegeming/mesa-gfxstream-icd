@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -21,6 +21,7 @@ on:
       - 'scripts/*native_cpu_reverse*'
       - 'scripts/*native_cpu_prefault*'
       - 'scripts/*niri_image_external_types*'
+      - 'scripts/*niri_image_query_trace*'
 
 permissions:
   contents: read
@@ -86,6 +87,10 @@ jobs:
           cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-prefault-before/"
           python3 -I ci/scripts/patch_native_cpu_prefault.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_niri_image_external_types.py "$GITHUB_WORKSPACE/source"
+          mkdir "$RUNNER_TEMP/niri-image-trace-before"
+          cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp "$RUNNER_TEMP/niri-image-trace-before/"
+          python3 -I ci/scripts/patch_niri_image_query_trace.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_niri_image_query_trace.py "$RUNNER_TEMP/niri-image-trace-before" "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" "$GITHUB_WORKSPACE/source"
           git -C source diff --check
           mkdir out
@@ -103,6 +108,8 @@ jobs:
           cp ci/scripts/*native_cpu_reverse* out/
           cp ci/scripts/*native_cpu_prefault* out/
           cp ci/scripts/*niri_image_external_types* out/
+          cp ci/scripts/*niri_image_query_trace* out/
+          python3 -I ci/scripts/test_niri_image_query_trace.py "$RUNNER_TEMP/niri-image-trace-before" "$GITHUB_WORKSPACE/source" > out/niri-image-query-trace-tests.txt
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -411,6 +418,16 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_image_external_types.py', 'test_niri_image_external_types.py',
                                           'niri-image-external-types-tests.txt']}
+              },
+              "niri_image_query_trace": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NIRI_IMAGE_TRACE exactly1 and associated instance applicationName exactly niri",
+                  "bound": "64 global metadata records; pNext sType walk max8; BEGIN/END share event id",
+                  "content": "Original wire query before host codec; actual native input/query result/raw external features compatible/export bits before guest synthesis; image create/result and native memory requirements metadata",
+                  "unchanged": "No extra queries, driver expressions/results, allocation flags/indices, synchronization or payload access",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_image_query_trace.py', 'test_niri_image_query_trace.py',
+                                          'niri-image-query-trace-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
