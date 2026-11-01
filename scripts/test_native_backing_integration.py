@@ -68,4 +68,8 @@ assert 'std::vector<SharedLibrary*> mLibs;' in loader
 assert '~SharedLibraries() = default;' in loader
 assert 'dlclose(' not in loader
 print('PASS: production owner propagation, device/instance finalizers, all-generation revocation, retained unmap/remap, reset rejection, forced drop quarantine, post-stop drain, fail-closed raw native/imported paths; descriptor paths retained')
-print('BLOCKERS: no negotiated VMM identity/ack/quarantine contract; device child teardown still synchronous outside mMutex; no guest/PFN/cache/GPU validation')
+assert 'new InstanceObjects::DeviceObjects(std::move(deviceObjects))' in d
+assert 'std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);' in frontend
+assert 'if (mNativeRetiring) return -EBUSY;' in frontend
+assert '} // release resource operation lock before context cleanup/decoder waits' in frontend
+print('BOUNDARY: exact paired init contract and native owner epoch required; old VMM rejected; failed GPU idle quarantines native children; no guest/PFN/cache/GPU validation')
