@@ -4,7 +4,7 @@ import re
 import sys
 
 VULKAN = set('vkCreateInstance vkDestroyInstance vkEnumeratePhysicalDevices vkGetPhysicalDeviceProperties vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceQueueFamilyProperties vkCreateDevice vkDestroyDevice vkAllocateMemory vkMapMemory vkUnmapMemory vkFreeMemory'.split())
-CALLS = VULKAN | set('main decode_pagemap pagemap_offset fault_and_mark own_mapping_metadata hold_mapping LOG printf putchar fflush strcmp strncmp strstr getenv sysconf sizeof _Alignof if for while UINT32_C UINT64_C VK_API_VERSION_MAJOR VK_API_VERSION_MINOR VK_API_VERSION_PATCH fopen fgets sscanf ferror fclose open pread close getpid clock_gettime sleep'.split())
+CALLS = VULKAN | set('main decode_pagemap pagemap_offset fault_and_mark own_mapping_metadata hold_mapping LOG printf putchar fflush strcmp strncmp strstr getenv sysconf sizeof _Alignof if for while return UINT32_C UINT64_C VK_API_VERSION_MAJOR VK_API_VERSION_MINOR VK_API_VERSION_PATCH fopen fgets sscanf ferror fclose open pread close getpid clock_gettime sleep'.split())
 IMPORTS = VULKAN | set('__libc_start_main __cxa_finalize __gmon_start__ __stack_chk_fail __stack_chk_guard abort _ITM_deregisterTMCloneTable _ITM_registerTMCloneTable printf __printf_chk putchar puts putc fflush stdout strcmp strncmp strstr getenv sysconf memcpy memset fopen fgets __fgets_chk __isoc99_sscanf __isoc23_sscanf ferror fclose open open64 pread pread64 close getpid clock_gettime sleep __errno_location'.split())
 TOKENS = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*'
 
@@ -12,7 +12,8 @@ TOKENS = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*'
 def check(source):
     clean = re.sub(TOKENS, lambda m: '' if m[0].startswith(('/*', '//')) else m[0], source, flags=re.S)
     code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '""', clean)
-    assert set(re.findall(r'\b([A-Za-z_]\w*)\s*\(', code)) == CALLS
+    actual_calls = set(re.findall(r'\b([A-Za-z_]\w*)\s*\(', code))
+    assert actual_calls == CALLS, {'unexpected': actual_calls - CALLS, 'missing': CALLS - actual_calls}
     assert set(re.findall(r'\bvk[A-Z]\w*', code)) == VULKAN
     assert not re.search(r'\b(?:PFN_\w+|Vk\w*(?:Import|Export|External|Buffer|Image|Command|Shader)\w*)\b', code)
     assert re.findall(r'\bfopen\(([^;]+)\);', clean) == ['"/proc/self/maps", "r"']
