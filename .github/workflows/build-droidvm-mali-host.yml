@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -218,7 +218,7 @@ jobs:
           "$RUNNER_TEMP/test-native-cpu-reverse"
           python3 -I ci/scripts/test_native_cpu_crossview_integration.py "$RUNNER_TEMP/native-crossview-before" source | tee out/native-cpu-crossview-tests.txt
 
-      - name: Test read-only prefault helper on ordinary CPU arrays
+      - name: Test one-store prewrite helper on ordinary CPU arrays
         shell: bash
         run: |
           set -euo pipefail
@@ -226,7 +226,7 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer -Ici/scripts \
             ci/scripts/test_native_cpu_prefault.cpp -o "$RUNNER_TEMP/test-native-cpu-prefault"
           "$RUNNER_TEMP/test-native-cpu-prefault"
-          python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" source | tee out/native-cpu-prefault-tests.txt
+          python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" source | tee out/native-cpu-prewrite-tests.txt
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -379,16 +379,16 @@ jobs:
                   "boundary": "Reverse visibility diagnostic only, not a forward handshake/GPU/maintenance-free coherence proof; no additional cache maintenance",
                   "test_sha256": hashlib.sha256(Path('out/test_native_cpu_reverse.cpp').read_bytes()).hexdigest()
               },
-              "native_cpu_prefault": {
+              "native_cpu_prewrite": {
                   "default_enabled": False,
-                  "gate": "GFXSTREAM_NATIVE_CPU_PREFAULT exactly1 and app guest-native-cpu-crossview or guest-native-cpu-reverse; one allocation per app, at most2 reads per process",
-                  "operation": "After native map owner records exact pointer and before publication: one volatile32 read at offset0 then ARM64 dsb sy; no payload stores or extra cache maintenance",
-                  "guard": "Actual physical type8 HOST_VISIBLE|HOST_COHERENT, owned generation/current epoch, mapped pointer identity, allocation4096/page4096/page aligned/address bounds",
+                  "gate": "GFXSTREAM_NATIVE_CPU_PREWRITE exactly1 and app guest-native-cpu-crossview or guest-native-cpu-reverse; one allocation per app, at most2 stores per process; previous readonly PREFAULT env disabled",
+                  "operation": "After native map owner records exact pointer and before publication: one volatile32 store0x13579bdf at offset0 then ARM64 dsb sy; no payload reads or extra cache maintenance; BEGIN/END around store",
+                  "guard": "Actual physical type8 HOST_VISIBLE|HOST_COHERENT, owned generation/current epoch, mapped pointer identity, allocation4096/page4096/page aligned/address bounds, fresh unbound and never-published allocation",
                   "boundary": "Diagnostic preregistration fault hypothesis, not established production requirement or GPU/coherence proof; forward/reverse hooks unchanged",
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['native_cpu_prefault.h', 'patch_native_cpu_prefault.py',
                                           'test_native_cpu_prefault.cpp', 'test_native_cpu_prefault_integration.py',
-                                          'native-cpu-prefault-tests.txt']}
+                                          'native-cpu-prewrite-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,

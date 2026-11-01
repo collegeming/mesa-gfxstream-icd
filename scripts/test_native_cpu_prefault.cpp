@@ -2,7 +2,7 @@
 #include <array>
 #include <cassert>
 #include <initializer_list>
-using namespace gfxstream::host::native_prefault;
+using namespace gfxstream::host::native_prewrite;
 int main() {
     assert(application("1", "guest-native-cpu-crossview") == 0);
     assert(application("1", "guest-native-cpu-reverse") == 1);
@@ -12,18 +12,19 @@ int main() {
     assert(application("1", "guest-native-cpu-crossview-extra") == -1);
     alignas(4096) std::array<uint32_t, 1024> data{};
     data.fill(0x12345678); auto before = data;
-    Guard good{4096, 4096, true, true, true, true};
-    Budget budget; uint32_t observed = 0;
+    Guard good{4096, 4096, true, true, true, true, true};
+    Budget budget;
     unsigned begins = 0;
-    assert(touch(0, good, data.data(), budget, observed, [&] { ++begins; assert(observed == 0); }));
-    assert(begins == 1);
-    assert(observed == 0x12345678 && data == before);
-    assert(!touch(0, good, data.data(), budget, observed, [&] { ++begins; }));
-    assert(begins == 1); // rejected budget cannot emit BEGIN or read
-    assert(touch(1, good, data.data(), budget, observed));
-    assert(!touch(1, good, data.data(), budget, observed));
-    assert(data == before);
-    for (unsigned i = 0; i < 9; ++i) {
+    assert(touch(0, good, data.data(), budget, [&] { ++begins; assert(data == before); }));
+    assert(begins == 1 && data.front() == 0x13579bdf);
+    for (unsigned i = 1; i < data.size(); ++i) assert(data[i] == before[i]);
+    auto written = data;
+    assert(!touch(0, good, data.data(), budget, [&] { ++begins; }));
+    assert(begins == 1 && data == written);
+    assert(touch(1, good, data.data(), budget));
+    assert(!touch(1, good, data.data(), budget));
+    assert(data == written);
+    for (unsigned i = 0; i < 10; ++i) {
         auto invalid = good;
         if (i == 0) invalid.size = 8192;
         if (i == 1) invalid.page = 0;
@@ -32,13 +33,13 @@ int main() {
         if (i == 4) invalid.epochCurrent = false;
         if (i == 5) invalid.mapped = false;
         if (i == 6) invalid.physicalType8CoherentVisible = false;
-        const void* ptr = data.data();
-        if (i == 7) ptr = reinterpret_cast<const uint8_t*>(data.data()) + 4;
+        if (i == 9) invalid.freshUnbound = false;
+        void* ptr = data.data();
+        if (i == 7) ptr = reinterpret_cast<uint8_t*>(data.data()) + 4;
         if (i == 8) ptr = nullptr;
         Budget rejected;
-        assert(!touch(0, invalid, ptr, rejected, observed, [&] { ++begins; }));
-        assert(begins == 1); // invalid guard cannot emit BEGIN or read
-        assert(touch(0, good, data.data(), rejected, observed));
-        assert(data == before);
+        assert(!touch(0, invalid, ptr, rejected, [&] { ++begins; }));
+        assert(begins == 1 && data == written);
+        assert(touch(0, good, data.data(), rejected));
     }
 }
