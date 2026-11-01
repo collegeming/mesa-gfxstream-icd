@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -20,6 +20,7 @@ on:
       - 'scripts/*native_cpu_crossview*'
       - 'scripts/*native_cpu_reverse*'
       - 'scripts/*native_cpu_prefault*'
+      - 'scripts/*niri_image_external_types*'
 
 permissions:
   contents: read
@@ -84,6 +85,7 @@ jobs:
           mkdir "$RUNNER_TEMP/native-prefault-before"
           cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-prefault-before/"
           python3 -I ci/scripts/patch_native_cpu_prefault.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/patch_niri_image_external_types.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" "$GITHUB_WORKSPACE/source"
           git -C source diff --check
           mkdir out
@@ -100,6 +102,7 @@ jobs:
           cp ci/scripts/*native_cpu_crossview* out/
           cp ci/scripts/*native_cpu_reverse* out/
           cp ci/scripts/*native_cpu_prefault* out/
+          cp ci/scripts/*niri_image_external_types* out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -227,6 +230,16 @@ jobs:
             ci/scripts/test_native_cpu_prefault.cpp -o "$RUNNER_TEMP/test-native-cpu-prefault"
           "$RUNNER_TEMP/test-native-cpu-prefault"
           python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" source | tee out/native-cpu-prewrite-tests.txt
+
+      - name: Test exact production image external-type snippets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I ci/scripts/test_niri_image_external_types.py source "$RUNNER_TEMP/test-niri-image-types.cpp" | tee out/niri-image-external-types-tests.txt
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Ivulkan-headers/include \
+            "$RUNNER_TEMP/test-niri-image-types.cpp" -o "$RUNNER_TEMP/test-niri-image-types"
+          "$RUNNER_TEMP/test-niri-image-types"
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -389,6 +402,15 @@ jobs:
                              for name in ['native_cpu_prefault.h', 'patch_native_cpu_prefault.py',
                                           'test_native_cpu_prefault.cpp', 'test_native_cpu_prefault_integration.py',
                                           'native-cpu-prewrite-tests.txt']}
+              },
+              "niri_image_external_types": {
+                  "fix": "Preserve explicit DMA_BUF query and image-create types exactly, no platform-default AHB substitution or augmentation",
+                  "unchanged": "Existing opaque/platform aliases, actual fd/AHB imports, native ownership, memory indices/flags, zero allocation/coherent guards",
+                  "validation": "Compile exact production transform snippets with actual Vulkan structs and ASan/UBSan; DMA0x200/AHB0x400/opaque0x1/zero identity; full Android backend build",
+                  "boundary": "Fix invalid query/create contract; does not prove desktop/display or coherent shared-data acceptance",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_image_external_types.py', 'test_niri_image_external_types.py',
+                                          'niri-image-external-types-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
