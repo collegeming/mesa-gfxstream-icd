@@ -16,7 +16,8 @@ jobs:
     timeout-minutes: 45
     env:
       CROSVM_COMMIT: 849e05f12d5c8d4c36af8e15763986d242cd43b5
-      MINIJAIL_COMMIT: 8787d1a4fdd7c64791607a1122d2408b3b35ade4
+      # Last real upstream revision before Linux 6.14 securebits requirement; matches r27c headers and bindgen0.63 lock.
+      MINIJAIL_COMMIT: 8330e01d0fd55dfe505890eb5f829b77ac4ca8cb
       APK_SHA256: 9c0b80c2be0717e8adcc768cdcc910d89443250fedaa9350574fad1df5af5b2c
       BACKEND_ARTIFACT: '13075596084'
       BACKEND_SHA256: d6fb372614583f85454d098ea4e9567222a8447dc1b18bcec75e9087476c0d9e
@@ -106,7 +107,11 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/native-headers/sys"
           cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
           cd source
-          cargo check --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
+          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
+          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-build.log
+          cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
+          "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
+          sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
       - name: Package discovery evidence (never claim a binary for cargo check)
         if: always()
         shell: bash
