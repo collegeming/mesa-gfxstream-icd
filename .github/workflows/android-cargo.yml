@@ -1,0 +1,110 @@
+name: crosvm-android-cargo-discovery
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/crosvm-android-cargo]
+    paths: ['.github/workflows/android-cargo.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: crosvm-android-cargo-discovery
+  cancel-in-progress: false
+jobs:
+  android-cargo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CROSVM_COMMIT: 849e05f12d5c8d4c36af8e15763986d242cd43b5
+      MINIJAIL_COMMIT: 8787d1a4fdd7c64791607a1122d2408b3b35ade4
+      APK_SHA256: 9c0b80c2be0717e8adcc768cdcc910d89443250fedaa9350574fad1df5af5b2c
+      BACKEND_ARTIFACT: '13075596084'
+      BACKEND_SHA256: d6fb372614583f85454d098ea4e9567222a8447dc1b18bcec75e9087476c0d9e
+      RUSTUP_TOOLCHAIN: 1.90.0
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout pinned production crosvm source (unpatched baseline)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/crosvm
+          ref: ${{ env.CROSVM_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Materialize real minijail for upstream symlink (not a gitlink)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: google/minijail
+          ref: ${{ env.MINIJAIL_COMMIT }}
+          path: minijail
+          persist-credentials: false
+      - name: Prepare real Android toolchain and native artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence native-libs downloads/apk downloads/backend downloads/ndk extracted/apk extracted/backend extracted/ndk
+          df -h | tee evidence/disk.txt
+          git -C source rev-parse HEAD | tee evidence/crosvm-commit.txt
+          git -C minijail rev-parse HEAD | tee evidence/minijail-commit.txt
+          test "$(git -C source rev-parse HEAD)" = "$CROSVM_COMMIT"
+          test "$(git -C minijail rev-parse HEAD)" = "$MINIJAIL_COMMIT"
+          test -f source/third_party/minijail/rust/minijail/Cargo.toml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libclang-dev libwayland-dev wayland-protocols libcap-dev pkg-config
+          curl --fail --location --retry 3 -o downloads/apk/droidvm.apk https://github.com/Droid-VM/DroidVM/releases/download/0.0.6/DroidVM-v0.0.6.apk
+          printf '%s  %s\n' "$APK_SHA256" downloads/apk/droidvm.apk | sha256sum -c -
+          unzip -q downloads/apk/droidvm.apk -d extracted/apk
+          find extracted/apk -type f -name '*.so' | tee evidence/apk-libraries.txt
+          gh api "repos/collegeming/mesa-gfxstream-icd/actions/artifacts/$BACKEND_ARTIFACT/zip" > downloads/backend/artifact.zip
+          printf '%s  %s\n' "$BACKEND_SHA256" downloads/backend/artifact.zip | sha256sum -c -
+          unzip -q downloads/backend/artifact.zip -d extracted/backend
+          find extracted/backend -type f -name libgfxstream_backend.so -exec cp '{}' native-libs/ \;
+          test -f native-libs/libgfxstream_backend.so
+          curl --fail --location --retry 3 -o downloads/ndk/ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          printf '%s  %s\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e downloads/ndk/ndk.zip | sha1sum -c -
+          unzip -q downloads/ndk/ndk.zip -d extracted/ndk
+          NDK="$GITHUB_WORKSPACE/extracted/ndk/android-ndk-r27c"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          grep -q '27.2.12479018' "$NDK/source.properties"
+          printf 'ANDROID_NDK_HOME=%s\nTC=%s\n' "$NDK" "$TC" >> "$GITHUB_ENV"
+          printf '%s\n' "$TC/bin" >> "$GITHUB_PATH"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-linux-android
+          rustc --version | tee evidence/rustc.txt
+          sha256sum native-libs/* | tee evidence/native-checksums.txt
+          "$TC/bin/llvm-readelf" -h -d native-libs/libgfxstream_backend.so > evidence/backend-elf.txt
+          # Dependencies are updated explicitly because standalone google/minijail has newer build deps than the AOSP lock.
+          cp source/Cargo.lock evidence/Cargo.lock.original
+      - name: Android Cargo check discovery (real native build scripts, no stubs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/bin/aarch64-linux-android33-clang"
+          export CC_aarch64_linux_android="$TC/bin/aarch64-linux-android33-clang"
+          export CXX_aarch64_linux_android="$TC/bin/aarch64-linux-android33-clang++"
+          export AR_aarch64_linux_android="$TC/bin/llvm-ar"
+          export GFXSTREAM_PATH="$GITHUB_WORKSPACE/native-libs"
+          export MINIJAIL_BINDGEN_TARGET=aarch64-linux-android33
+          export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$TC/sysroot"
+          # Wayland scanner and headers are build inputs; do not link Ubuntu libraries into Android.
+          mkdir -p "$GITHUB_WORKSPACE/native-headers"
+          cp /usr/include/wayland*.h "$GITHUB_WORKSPACE/native-headers/"
+          export CFLAGS_aarch64_linux_android="-I$GITHUB_WORKSPACE/native-headers"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN"
+          cd source
+          cargo check --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,android_display,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
+      - name: Package discovery evidence (never claim a binary for cargo check)
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
+          git -C source diff --binary > evidence/source.patch
+          printf '%s\n' 'DISCOVERY ONLY. Android app console requires real libcrosvm_android_display_client. No stub libraries. No detach patch applied in baseline.' > evidence/scope.txt
+      - name: Upload exact diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crosvm-android-cargo-discovery-${{ github.run_id }}
+          path: evidence/
+          retention-days: 14
