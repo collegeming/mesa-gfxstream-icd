@@ -17,7 +17,7 @@ int main() {
     allocationBlob.blobId = 77;
     assert(allocationBlob.blobFlags == 0);
     assert(native::nativeBlob(true, allocationBlob.blobMem, allocationBlob.blobFlags));
-    stream_renderer_create_blob resourceBlob{};
+    struct stream_renderer_create_blob resourceBlob{};
     resourceBlob.blob_mem = STREAM_BLOB_MEM_HOST3D;
     resourceBlob.blob_flags = STREAM_BLOB_FLAG_USE_MAPPABLE;
     resourceBlob.blob_id = allocationBlob.blobId;
