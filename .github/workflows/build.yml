@@ -46,6 +46,7 @@ jobs:
         run: |
           cd mesa
           meson setup build --buildtype=debugoptimized -Dwerror=false \
+            -Dc_args=-fno-omit-frame-pointer -Dcpp_args=-fno-omit-frame-pointer \
             -Dvulkan-drivers=gfxstream \
             -Dgallium-drivers= \
             -Dplatforms= \
