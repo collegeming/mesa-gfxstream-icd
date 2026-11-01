@@ -519,6 +519,143 @@ edit(
     if (VK_SUCCESS != vk->vkBindImageMemory(device, out->mImage, out->mImageMemory, bindOffset)) {''',
 )
 
+# Fail closed for the observed zero-size, non-AHB allocation/bind mismatch.
+# AHB size-zero imports are allowed only with a non-null actual AHB source.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "    VkResult on_vkAllocateMemory(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,",
+    '''    bool rejectZeroSizeAllocation(const VkMemoryAllocateInfo& allocInfo,
+                                  const char* stage, bool allowColorBufferSource) {
+        if (allocInfo.allocationSize != 0) return false;
+#ifdef __ANDROID__
+        const auto* ahbImport = vk_find_struct<VkImportAndroidHardwareBufferInfoANDROID>(&allocInfo);
+        if (ahbImport && ahbImport->buffer) return false;
+        if (allowColorBufferSource) {
+            const auto* cbImport = vk_find_struct<VkImportColorBufferGOOGLE>(&allocInfo);
+            if (cbImport) {
+                const auto cb = m_vkEmulation->getColorBufferInfo(cbImport->colorBuffer);
+                if (cb && cb->memory.handleInfo && cb->memory.handleInfo->handle &&
+                    cb->memory.handleInfo->streamHandleType == STREAM_HANDLE_TYPE_PLATFORM_AHB) {
+                    return false;
+                }
+            }
+        }
+#endif
+        (void)allowColorBufferSource;
+        const auto* dedicated = vk_find_struct<VkMemoryDedicatedAllocateInfo>(&allocInfo);
+        const auto* blob = vk_find_struct<VkCreateBlobGOOGLE>(&allocInfo);
+        GFXSTREAM_ERROR(
+            "ALLOC-ZERO-REJECT: stage=%s size=0 memindex=%u dedicatedImage=%p dedicatedBuffer=%p "
+            "blobId=%llu no-real-AHB-import result=%d",
+            stage, allocInfo.memoryTypeIndex, dedicated ? (void*)dedicated->image : nullptr,
+            dedicated ? (void*)dedicated->buffer : nullptr,
+            blob ? (unsigned long long)blob->blobId : 0ULL, (int)VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        if (dedicated && dedicated->image) {
+            std::lock_guard<std::mutex> diagnosticLock(mMutex);
+            const auto* image = gfxstream::base::find(mImageInfo, dedicated->image);
+            if (image) {
+                const auto& ci = image->imageCreateInfoShallow;
+                GFXSTREAM_ERROR(
+                    "ALLOC-ZERO-IMAGE: fmt=%d flags=0x%x usage=0x%x tiling=%d extent=%ux%ux%u externalTypes=0x%x",
+                    (int)ci.format, ci.flags, ci.usage, (int)ci.tiling,
+                    ci.extent.width, ci.extent.height, ci.extent.depth,
+                    image->diagnosticExternalHandleTypes);
+            }
+        }
+        return true;
+    }
+
+    VkResult on_vkAllocateMemory(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        VkMemoryAllocateInfo localAllocInfo = vk_make_orphan_copy(*pAllocateInfo);
+        vk_struct_chain_iterator structChainIter''',
+    '''        VkMemoryAllocateInfo localAllocInfo = vk_make_orphan_copy(*pAllocateInfo);
+        // Check the original chain before alignment/padding and before any driver call.
+        // ColorBuffer imports may obtain their real AHB and size later in this function.
+        if (rejectZeroSizeAllocation(*pAllocateInfo, "entry", true)) {
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        vk_struct_chain_iterator structChainIter''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''                vk->vkGetMemoryHostPointerPropertiesEXT(
+                    device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, mappedPtr,''',
+    '''                if (rejectZeroSizeAllocation(localAllocInfo, "before-host-properties", false)) {
+                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                }
+                vk->vkGetMemoryHostPointerPropertiesEXT(
+                    device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, mappedPtr,''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+    '''        if (rejectZeroSizeAllocation(localAllocInfo, "before-allocate", false)) {
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+)
+
+# One validation helper covers vkBindImageMemory and the non-emulated
+# vkBindImageMemory2 fast path without routing either through a different path.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "    VkResult performBindImageMemory(gfxstream::base::BumpPool* pool,",
+    '''    bool rejectZeroSizeAhbImageBindLocked(VkImage image, VkDeviceMemory memory,
+                                           VkDeviceSize offset) REQUIRES(mMutex) {
+        const auto* imageInfo = gfxstream::base::find(mImageInfo, image);
+        const auto* memoryInfo = gfxstream::base::find(mMemoryInfo, memory);
+        if (!imageInfo || !memoryInfo || memoryInfo->size != 0 ||
+            !(imageInfo->diagnosticExternalHandleTypes &
+              VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) ||
+            (memoryInfo->diagnosticStreamType == STREAM_HANDLE_TYPE_PLATFORM_AHB &&
+             memoryInfo->diagnosticAhb)) {
+            return false;
+        }
+        const auto& ci = imageInfo->imageCreateInfoShallow;
+        GFXSTREAM_ERROR(
+            "BIND-ZERO-AHB-REJECT: image=%p memory=%p offset=%llu fmt=%d flags=0x%x usage=0x%x "
+            "tiling=%d externalTypes=0x%x memsize=0 memindex=%u streamType=0x%x fd=%d ahb=%p "
+            "hostptr=%p blobId=%llu cb=%u result=%d",
+            (void*)image, (void*)memory, (unsigned long long)offset, (int)ci.format,
+            ci.flags, ci.usage, (int)ci.tiling, imageInfo->diagnosticExternalHandleTypes,
+            memoryInfo->memoryIndex, memoryInfo->diagnosticStreamType,
+            memoryInfo->diagnosticImportFd, memoryInfo->diagnosticAhb,
+            memoryInfo->diagnosticHostPtr, (unsigned long long)memoryInfo->blobId,
+            memoryInfo->boundColorBuffer ? *memoryInfo->boundColorBuffer : 0,
+            (int)VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        return true;
+    }
+
+    VkResult performBindImageMemory(gfxstream::base::BumpPool* pool,''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''            const auto* diagnosticMemory = gfxstream::base::find(mMemoryInfo, memory);
+            if (diagnosticImage) {''',
+    '''            const auto* diagnosticMemory = gfxstream::base::find(mMemoryInfo, memory);
+            if (rejectZeroSizeAhbImageBindLocked(image, memory, memoryOffset)) {
+                return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            }
+            if (diagnosticImage) {''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        VkResult result = vk->vkBindImageMemory2(device, bindInfoCount, pBindInfos);''',
+    '''        {
+            std::lock_guard<std::mutex> diagnosticLock(mMutex);
+            for (uint32_t i = 0; i < bindInfoCount; ++i) {
+                if (rejectZeroSizeAhbImageBindLocked(pBindInfos[i].image, pBindInfos[i].memory,
+                                                   pBindInfos[i].memoryOffset)) {
+                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                }
+            }
+        }
+        VkResult result = vk->vkBindImageMemory2(device, bindInfoCount, pBindInfos);''',
+)
+
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.
 platform_default = (root / "host/vulkan/external_memory.cpp").read_text(encoding="utf-8")
 if """#elif defined(__ANDROID__)

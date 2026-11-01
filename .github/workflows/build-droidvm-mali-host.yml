@@ -147,7 +147,8 @@ jobs:
                   "Log RingBlob and Android fillExportHandle type/handle/errno without changing AHB export semantics",
                   "Alias importer selects AHB/DMA_BUF/OPAQUE_FD by actual stream type, rejects SHM, and cleans up failed fd imports",
                   "Force dedicated image allocations for AndroidAHB ColorBuffer backing and AHB alias images",
-                  "Log image transform external types, decoder allocation provenance, and image/memory state before driver bind calls"
+                  "Log image transform external types, decoder allocation provenance, and image/memory state before driver bind calls",
+                  "Reject zero-size non-AHB allocations before driver calls and zero-size non-AHB memory binds to AHB images in both bind entry points"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
