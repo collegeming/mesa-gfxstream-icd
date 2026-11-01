@@ -21,7 +21,7 @@ def check(source):
     assert re.findall(r'"(/proc/[^"\n]*)"', clean) == ['/proc/self/maps', '/proc/self/pagemap']
     assert not re.search(r'/dev/|mmap|ioctl|KVM_|asm\b', clean)
     assert re.findall(r'\bsleep\(([^)]+)\)', code) == ['45']
-    hold = clean[clean.index('static int hold_mapping'):clean.index('\n#endif', clean.index('static int hold_mapping'))]
+    hold = code[code.index('static int hold_mapping'):code.index('\n#endif', code.index('static int hold_mapping'))]
     assert not re.search(r'\b(?:for|while)\b', hold)
     assert 'sleep_error == EINTR' in hold and 'return status;' in hold
     helper = code[code.index('static int fault_and_mark'):code.index('#ifndef MAP_IDENTITY_CPU_ONLY', code.index('static int fault_and_mark'))]
