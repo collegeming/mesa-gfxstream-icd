@@ -108,10 +108,31 @@ jobs:
           cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
           python3 -I - <<'PY'
           from pathlib import Path
-          p = Path('source/devices/src/virtio/rng.rs')
+          for name, count in [('devices/src/virtio/rng.rs', 1), ('aarch64/src/fdt.rs', 2)]:
+              p = Path('source') / name
+              s = p.read_text()
+              assert s.count('rand::rng()') == count
+              p.write_text(s.replace('rand::rng()', 'rand::thread_rng()'))
+          # The fork added Gunyah-only boot-shim references without Cargo feature guards.
+          # Keep real Gunyah behavior when enabled; KVM-only builds reject that mode explicitly.
+          p = Path('source/aarch64/Cargo.toml')
           s = p.read_text()
-          assert s.count('rand::rng()') == 1
-          p.write_text(s.replace('rand::rng()', 'rand::thread_rng()'))
+          assert s.count('[features]\n') == 1
+          p.write_text(s.replace('[features]\n', '[features]\ngunyah = ["hypervisor/gunyah"]\n'))
+          p = Path('source/Cargo.toml')
+          s = p.read_text()
+          old = 'gunyah = ["devices/gunyah", "hypervisor/gunyah"]'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'gunyah = ["devices/gunyah", "hypervisor/gunyah", "aarch64/gunyah"]'))
+          p = Path('source/aarch64/src/lib.rs')
+          s = p.read_text()
+          for marker in ['const SHIM_IMAGE:', 'fn load_shim(', 'fn init_handoff(']:
+              assert s.count(marker) == 1
+              s = s.replace(marker, '#[cfg(feature = "gunyah")]\n' + marker)
+          old = '        let entry = if shares_guest_ram {'
+          assert s.count(old) == 1
+          s = s.replace(old, '        #[cfg(not(feature = "gunyah"))]\n        if shares_guest_ram {\n            return Err(Error::Unsupported);\n        }\n        #[cfg(not(feature = "gunyah"))]\n        let entry = payload.entry();\n        #[cfg(feature = "gunyah")]\n' + old)
+          p.write_text(s)
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
