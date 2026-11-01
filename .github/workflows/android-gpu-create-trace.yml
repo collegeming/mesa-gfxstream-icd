@@ -1,0 +1,358 @@
+name: crosvm-gpu-create-trace
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/crosvm-gpu-create-trace]
+    paths: ['.github/workflows/android-gpu-create-trace.yml', 'scripts/patch_crosvm_gpu_create_trace.py']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: crosvm-gpu-create-trace
+  cancel-in-progress: false
+jobs:
+  android-cargo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CROSVM_COMMIT: 849e05f12d5c8d4c36af8e15763986d242cd43b5
+      # Last real upstream revision before Linux 6.14 securebits requirement; matches r27c headers and bindgen0.63 lock.
+      MINIJAIL_COMMIT: 8330e01d0fd55dfe505890eb5f829b77ac4ca8cb
+      APK_SHA256: 9c0b80c2be0717e8adcc768cdcc910d89443250fedaa9350574fad1df5af5b2c
+      BACKEND_ARTIFACT: '13077002513'
+      BACKEND_SHA256: a95c3137af9bec2283071f5175194bf43ed4e0048bee5e7fa62d5be1d5bca88a
+      RUSTUP_TOOLCHAIN: 1.90.0
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '4'
+      CARGO_PROFILE_RELEASE_DEBUG: '1'
+    steps:
+      - name: Checkout this diagnostic revision for trace patch provenance
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: trace-patches
+          persist-credentials: false
+      - name: Checkout pinned production crosvm source (unpatched baseline)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/crosvm
+          ref: ${{ env.CROSVM_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Materialize real minijail for upstream symlink (not a gitlink)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: google/minijail
+          ref: ${{ env.MINIJAIL_COMMIT }}
+          path: minijail
+          persist-credentials: false
+      - name: Checkout tested paired detach and lease patches
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/mesa-gfxstream-icd
+          ref: 8b193b4fd5211134b3cdae224157fe93a99fccef
+          path: pair-patches
+          persist-credentials: false
+      - name: Checkout real libcap source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mhiramat/libcap
+          ref: 8c67abc3f5cfa8310dae21e5db464fd990cb71a2
+          path: libcap-source
+          persist-credentials: false
+      - name: Checkout real libffi source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: libffi/libffi
+          ref: 3d0ce1e6fcf19f853894862abcbac0ae78a7be60
+          path: libffi-source
+          persist-credentials: false
+      - name: Checkout real Wayland source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: wayland-mirror/wayland
+          ref: b2649cb3ee6bd70828a17e50beb16591e6066288
+          path: wayland-source
+          persist-credentials: false
+      - name: Restore pinned Android native inputs
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: downloads
+          key: android-native-r27c-${{ env.APK_SHA256 }}-${{ env.BACKEND_SHA256 }}
+      - name: Restore Cargo registry and build outputs
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-${{ github.sha }}
+          restore-keys: |
+            android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-
+      - name: Prepare real Android toolchain and native artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence native-libs downloads/apk downloads/backend downloads/ndk extracted/apk extracted/backend extracted/ndk
+          df -h | tee evidence/disk.txt
+          git -C source rev-parse HEAD | tee evidence/crosvm-commit.txt
+          git -C minijail rev-parse HEAD | tee evidence/minijail-commit.txt
+          test "$(git -C source rev-parse HEAD)" = "$CROSVM_COMMIT"
+          test "$(git -C minijail rev-parse HEAD)" = "$MINIJAIL_COMMIT"
+          test -f source/third_party/minijail/rust/minijail/Cargo.toml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libclang-dev libwayland-dev wayland-protocols libcap-dev pkg-config autoconf automake libtool meson ninja-build
+          test -f downloads/apk/droidvm.apk || curl --fail --location --retry 3 -o downloads/apk/droidvm.apk https://github.com/Droid-VM/DroidVM/releases/download/0.0.6/DroidVM-v0.0.6.apk
+          printf '%s  %s\n' "$APK_SHA256" downloads/apk/droidvm.apk | sha256sum -c -
+          unzip -q downloads/apk/droidvm.apk -d extracted/apk
+          find extracted/apk -type f -name '*.so' | tee evidence/apk-libraries.txt
+          test -f downloads/backend/artifact.zip || gh api "repos/collegeming/mesa-gfxstream-icd/actions/artifacts/$BACKEND_ARTIFACT/zip" > downloads/backend/artifact.zip
+          printf '%s  %s\n' "$BACKEND_SHA256" downloads/backend/artifact.zip | sha256sum -c -
+          unzip -q downloads/backend/artifact.zip -d extracted/backend
+          find extracted/backend -type f -name libgfxstream_backend.so -exec cp '{}' native-libs/ \;
+          test -f native-libs/libgfxstream_backend.so
+          printf '%s  %s\n' 8312fe116f175c2ac242ccf10c06f76a6f422b841eefee20969338f97edf53ec native-libs/libgfxstream_backend.so | sha256sum -c -
+          test -f downloads/ndk/ndk.zip || curl --fail --location --retry 3 -o downloads/ndk/ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          printf '%s  %s\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e downloads/ndk/ndk.zip | sha1sum -c -
+          unzip -q downloads/ndk/ndk.zip -d extracted/ndk
+          NDK="$GITHUB_WORKSPACE/extracted/ndk/android-ndk-r27c"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          grep -q '27.2.12479018' "$NDK/source.properties"
+          printf 'ANDROID_NDK_HOME=%s\nTC=%s\n' "$NDK" "$TC" >> "$GITHUB_ENV"
+          printf '%s\n' "$TC/bin" >> "$GITHUB_PATH"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-linux-android
+          rustc --version | tee evidence/rustc.txt
+          sha256sum native-libs/* | tee evidence/native-checksums.txt
+          "$TC/bin/llvm-readelf" -h -d native-libs/libgfxstream_backend.so > evidence/backend-elf.txt
+          # Dependencies are updated explicitly because standalone google/minijail has newer build deps than the AOSP lock.
+          cp source/Cargo.lock evidence/Cargo.lock.original
+      - name: Build real Android libcap libffi and Wayland client
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$GITHUB_WORKSPACE/native-prefix"
+          export CC="$TC/bin/aarch64-linux-android33-clang"
+          export CXX="$TC/bin/aarch64-linux-android33-clang++"
+          export AR="$TC/bin/llvm-ar"
+          export RANLIB="$TC/bin/llvm-ranlib"
+          make -C libcap-source/libcap -j4 libcap.a CC="$CC" BUILD_CC=gcc BUILD_CFLAGS=-O2 AR="$AR" RANLIB="$RANLIB" BUILD_GPERF=no
+          cp libcap-source/libcap/libcap.a native-libs/
+          BUILTINS="$($CC -print-libgcc-file-name)"
+          test -f "$BUILTINS"
+          printf '%s\n' "$BUILTINS" | tee evidence/compiler-runtime.txt
+          cp "$BUILTINS" native-libs/libndk-builtins.a
+          mkdir -p downloads/libffi extracted/libffi
+          test -f downloads/libffi/libffi.tar.gz || curl --fail --location --retry 3 -o downloads/libffi/libffi.tar.gz https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+          printf '%s  %s\n' b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e downloads/libffi/libffi.tar.gz | sha256sum -c -
+          tar -xf downloads/libffi/libffi.tar.gz -C extracted/libffi
+          mkdir -p libffi-build
+          (cd libffi-build && ../extracted/libffi/libffi-3.4.6/configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static --with-pic && make -j4 && make install)
+          printf "[binaries]\nc = '%s'\ncpp = '%s'\nar = '%s'\nstrip = '%s'\npkg-config = '/usr/bin/pkg-config'\n[properties]\npkg_config_libdir = '%s/lib/pkgconfig'\n[host_machine]\nsystem = 'android'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'\n" "$CC" "$CXX" "$AR" "$TC/bin/llvm-strip" "$PREFIX" > wayland-cross.ini
+          meson setup wayland-build wayland-source --cross-file wayland-cross.ini --prefix "$PREFIX" --default-library static -Dscanner=false -Dtests=false -Ddocumentation=false -Ddtd_validation=false
+          ninja -C wayland-build src/libwayland-client.a
+          cp wayland-build/src/libwayland-client.a "$PREFIX/lib/libffi.a" native-libs/
+          find wayland-build -name '*.a' -print | tee evidence/wayland-static-archives.txt
+          sha256sum native-libs/* | tee evidence/native-checksums.txt
+      - name: Android Cargo check discovery (real native build scripts, no stubs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/bin/aarch64-linux-android33-clang"
+          export CC_aarch64_linux_android="$TC/bin/aarch64-linux-android33-clang"
+          export CXX_aarch64_linux_android="$TC/bin/aarch64-linux-android33-clang++"
+          export AR_aarch64_linux_android="$TC/bin/llvm-ar"
+          export GFXSTREAM_PATH="$GITHUB_WORKSPACE/native-libs"
+          export MINIJAIL_BINDGEN_TARGET=aarch64-linux-android33
+          export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$TC/sysroot"
+          # Wayland scanner and headers are build inputs; do not link Ubuntu libraries into Android.
+          mkdir -p "$GITHUB_WORKSPACE/native-headers"
+          cp /usr/include/wayland*.h "$GITHUB_WORKSPACE/native-headers/"
+          export CFLAGS_aarch64_linux_android="-I$GITHUB_WORKSPACE/native-headers"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN/../lib"
+          # Minijail's generic Cargo script invents a GCC prefix. Select the genuine NDK tools
+          # and build only the static archive the Rust script actually links (not unused CLI/shared targets).
+          python3 -I - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('minijail/rust/minijail-sys/build.rs')
+          s = p.read_text()
+          old = '.env("BUILD_STATIC_LIBS", "yes")'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '\n            .env("CC", std::env::var("CC_aarch64_linux_android").unwrap())\n            .env("CXX", std::env::var("CXX_aarch64_linux_android").unwrap())\n            .env("AR", std::env::var("AR_aarch64_linux_android").unwrap())\n            .env("CPPFLAGS", format!("-I{}/native-headers", std::env::var("GITHUB_WORKSPACE").unwrap()))\n            .arg("CC_STATIC_LIBRARY(libminijail.pic.a)")')
+          p.write_text(s)
+          PY
+          mkdir -p "$GITHUB_WORKSPACE/native-headers/sys"
+          cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
+          python3 -I pair-patches/scripts/patch_crosvm_native_detach.py "$GITHUB_WORKSPACE/source"
+          python3 -I pair-patches/scripts/patch_crosvm_native_lease.py "$GITHUB_WORKSPACE/source"
+          python3 -I - <<'PY'
+          from pathlib import Path
+          for name, count in [('aarch64/src/fdt.rs', 2)]:
+              p = Path('source') / name
+              s = p.read_text()
+              assert s.count('rand::rng()') == count
+              p.write_text(s.replace('rand::rng()', 'rand::thread_rng()'))
+          # The fork added Gunyah-only boot-shim references without Cargo feature guards.
+          # Keep real Gunyah behavior when enabled; KVM-only builds reject that mode explicitly.
+          p = Path('source/aarch64/Cargo.toml')
+          s = p.read_text()
+          assert s.count('[features]\n') == 1
+          p.write_text(s.replace('[features]\n', '[features]\ngunyah = ["hypervisor/gunyah"]\n'))
+          p = Path('source/Cargo.toml')
+          s = p.read_text()
+          old = 'gunyah = ["devices/gunyah", "hypervisor/gunyah"]'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'gunyah = ["devices/gunyah", "hypervisor/gunyah", "aarch64/gunyah"]'))
+          p = Path('source/aarch64/src/lib.rs')
+          s = p.read_text()
+          for marker in ['const SHIM_IMAGE:', 'fn load_shim(', 'fn init_handoff(']:
+              assert s.count(marker) == 1
+              s = s.replace(marker, '#[cfg(feature = "gunyah")]\n' + marker)
+          old = '        let entry = if shares_guest_ram {'
+          assert s.count(old) == 1
+          s = s.replace(old, '        #[cfg(not(feature = "gunyah"))]\n        if shares_guest_ram {\n            return Err(Error::Unsupported);\n        }\n        #[cfg(not(feature = "gunyah"))]\n        let entry = payload.entry();\n        #[cfg(feature = "gunyah")]\n' + old)
+          p.write_text(s)
+          p = Path('source/src/crosvm/sys/linux/device_helpers.rs')
+          s = p.read_text()
+          import re
+          assert re.search(r'(?m)^#\[cfg\(feature = "audio"\)\]\nfn create_unprivileged_virtio_snd_device\(', s)
+          p.write_text(s)
+          Path('evidence/audio-cfg-source.txt').write_text(s[s.index('/// Builds a virtio-snd device whose audio backend'):s.index('/// Builds a virtio-snd device whose audio backend') + 700])
+          p = Path('source/src/crosvm/sys/linux/android.rs')
+          s = p.read_text()
+          start = s.index('#[link(name = "processgroup")]')
+          end = s.index('// Apply the listed task profiles', start)
+          s = s[:start] + s[end:]
+          old = '    let owned: Vec<CString> = profiles'
+          assert s.count(old) == 1
+          s = s.replace(old, '''    // Standalone NDK binaries must resolve this optional platform API at runtime.
+              // Empty profiles retain their existing early return; requested profiles fail closed.
+              let handle = unsafe { libc::dlopen(b"libprocessgroup.so\\0".as_ptr().cast(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+              if handle.is_null() {
+                  return Err(anyhow!("libprocessgroup.so unavailable for requested task profiles"));
+              }
+              let symbol = unsafe { libc::dlsym(handle, b"android_set_process_profiles\\0".as_ptr().cast()) };
+              if symbol.is_null() {
+                  unsafe { libc::dlclose(handle); }
+                  return Err(anyhow!("android_set_process_profiles unavailable for requested task profiles"));
+              }
+              type SetProfiles = unsafe extern "C" fn(libc::uid_t, libc::pid_t, libc::size_t, *const *const libc::c_char) -> bool;
+              let android_set_process_profiles: SetProfiles = unsafe { std::mem::transmute(symbol) };
+          ''' + old)
+          old = '        if android_set_process_profiles(libc::getuid(), libc::getpid(), ptrs.len(), ptrs.as_ptr()) {'
+          assert s.count(old) == 1
+          s = s.replace(old, '        let success = android_set_process_profiles(libc::getuid(), libc::getpid(), ptrs.len(), ptrs.as_ptr());\n        libc::dlclose(handle);\n        if success {')
+          p.write_text(s)
+          p = Path('source/base/src/sys/linux/android/syslog.rs')
+          s = p.read_text()
+          old = '    fn __android_log_close();'
+          assert s.count(old) == 1
+          s = s.replace(old, '    fn __android_log_set_logger(logger: Option<unsafe extern "C" fn(*const __android_log_message)>);\n    fn __android_log_stderr_logger(message: *const __android_log_message);')
+          old = '        unsafe { __android_log_close() };'
+          assert s.count(old) == 1
+          s = s.replace(old, '        // Public API30+: child logs use stderr, never the stale inherited logd socket.\n        unsafe { __android_log_set_logger(Some(__android_log_stderr_logger)) };')
+          p.write_text(s)
+          # Wayland's real static client archive also needs its real private and libffi archives.
+          p = Path('source/gpu_display/build.rs')
+          s = p.read_text()
+          old = 'println!("cargo:rustc-link-lib=dylib=wayland-client");'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=ffi");\n    println!("cargo:rustc-link-lib=static=ndk-builtins");'))
+          PY
+          # Metadata-only increment AFTER all proven paired/Android source compatibility fixes.
+          git -C source diff --binary > evidence/source-before-gpu-create-trace.patch
+          cp source/devices/src/virtio/gpu/virtio_gpu.rs evidence/devices-before-gpu-create-trace.rs
+          cp source/rutabaga_gfx/src/gfxstream.rs evidence/gfxstream-before-gpu-create-trace.rs
+          cp trace-patches/scripts/patch_crosvm_gpu_create_trace.py evidence/
+          python3 -I trace-patches/scripts/patch_crosvm_gpu_create_trace.py "$GITHUB_WORKSPACE/source" | tee evidence/gpu-create-trace-patched-sha256.txt
+          python3 -I - <<'PY'
+          import difflib
+          from pathlib import Path
+          pairs = [('devices-before-gpu-create-trace.rs', 'devices/src/virtio/gpu/virtio_gpu.rs'),
+                   ('gfxstream-before-gpu-create-trace.rs', 'rutabaga_gfx/src/gfxstream.rs')]
+          lines = []
+          for before, name in pairs:
+              lines.extend(difflib.unified_diff(Path('evidence', before).read_text().splitlines(True), Path('source', name).read_text().splitlines(True), fromfile='a/' + name, tofile='b/' + name))
+          Path('evidence/crosvm-gpu-create-trace.patch').write_text(''.join(lines))
+          # Original calls and result conversions must survive unchanged.
+          dev = Path('source/devices/src/virtio/gpu/virtio_gpu.rs').read_text()
+          assert 'let create_result = self.rutabaga.resource_create_3d(resource_id, resource_create_3d);' in dev
+          assert 'create_result?;' in dev
+          assert dev.count('GFXSTREAM_NIRI_IMAGE_TRACE') == 1
+          assert dev.count('USED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16') == 1
+          gfx = Path('source/rutabaga_gfx/src/gfxstream.rs').read_text()
+          assert 'let ret = unsafe { stream_renderer_resource_create(&mut args, null_mut(), 0) };' in gfx
+          assert 'ret_to_res(ret)?;' in gfx
+          assert gfx.count('GFXSTREAM_NIRI_IMAGE_TRACE') == 1
+          assert gfx.count('USED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16') == 1
+          PY
+          git -C source diff --check
+          cd source
+          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
+          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-build.log
+          cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
+          "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
+          sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
+          mkdir -p ../evidence/runtime/bin ../evidence/runtime/lib ../evidence/symbols
+          cp ../evidence/crosvm ../evidence/runtime/bin/crosvm
+          cp ../native-libs/libgfxstream_backend.so ../evidence/runtime/lib/
+          "$TC/bin/llvm-objcopy" --only-keep-debug ../evidence/crosvm ../evidence/symbols/crosvm.debug
+          "$TC/bin/llvm-strip" --strip-debug ../evidence/runtime/bin/crosvm
+          "$TC/bin/llvm-readelf" -h -l -d -n ../evidence/runtime/bin/crosvm > ../evidence/runtime-crosvm-elf.txt
+          "$TC/bin/llvm-nm" -n ../evidence/crosvm > ../evidence/symbols/crosvm.nm
+          (cd ../evidence && sha256sum crosvm runtime/bin/* runtime/lib/* symbols/* > SHA256SUMS)
+          "$TC/bin/llvm-readelf" -d -V ../evidence/runtime/bin/* ../evidence/runtime/lib/* > ../evidence/runtime-dependencies.txt
+          python3 -I - <<'PY'
+          import json, re, subprocess, os
+          from pathlib import Path
+          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so'}
+          runtime = Path('../evidence/runtime')
+          closure = {}
+          files = [p for p in runtime.rglob('*') if p.is_file()]
+          for path in files:
+              elf = subprocess.check_output([os.environ['TC'] + '/bin/llvm-readelf', '-d', str(path)], text=True)
+              needed = re.findall(r'\(NEEDED\).*\[(.*?)\]', elf)
+              missing = set(needed) - platform - {p.name for p in files}
+              if missing:
+                  raise RuntimeError(f'{path}: unpackaged dependencies: {sorted(missing)}')
+              closure[path.name] = needed
+          Path('../evidence/dependency-closure.json').write_text(json.dumps({'android_api':33, 'system_libraries':sorted(platform), 'needed':closure}, indent=2))
+          PY
+      - name: Save pinned Android input cache
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: downloads
+          key: android-native-r27c-${{ env.APK_SHA256 }}-${{ env.BACKEND_SHA256 }}
+      - name: Save Cargo cache including failed compile progress
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-${{ github.sha }}
+      - name: Package discovery evidence (never claim a binary for cargo check)
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
+          git -C source diff --binary > evidence/source.patch
+          git -C minijail diff --binary > evidence/minijail.patch
+          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon. Built-in headless display; no Android AIDL display or VNC. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No local compilation, stubs, or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
+          for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
+          printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
+          printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt
+          sha256sum evidence/patch_crosvm_gpu_create_trace.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/gpu-create-trace-provenance.sha256
+          test ! -f evidence/crosvm || "$TC/bin/llvm-readelf" --dyn-syms --wide evidence/crosvm > evidence/crosvm-dynamic-symbols.txt
+      - name: Upload exact diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crosvm-gpu-create-trace-${{ github.run_id }}
+          path: evidence/
+          retention-days: 14
