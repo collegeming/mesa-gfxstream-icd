@@ -24,6 +24,8 @@ def main():
     # and block test literals predating queue_size. Keep fixes narrow and explicit.
     rng = root / 'devices/src/virtio/rng.rs'
     rng.write_text(replace(rng.read_text(), 'rand::rng()', 'rand::thread_rng()'))
+    x86 = root / 'x86_64/src/lib.rs'
+    x86.write_text(replace(x86.read_text(), 'rand::rng()', 'rand::thread_rng()'))
     block = root / 'devices/src/virtio/block/mod.rs'
     bs = block.read_text()
     before, tests = bs.split('#[cfg(test)]\nmod tests {', 1)
