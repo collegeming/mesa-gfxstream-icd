@@ -581,16 +581,6 @@ edit(
 )
 edit(
     "host/vulkan/vk_decoder_global_state.cpp",
-    '''                vk->vkGetMemoryHostPointerPropertiesEXT(
-                    device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, mappedPtr,''',
-    '''                if (rejectZeroSizeAllocation(localAllocInfo, "before-host-properties", false)) {
-                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                }
-                vk->vkGetMemoryHostPointerPropertiesEXT(
-                    device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, mappedPtr,''',
-)
-edit(
-    "host/vulkan/vk_decoder_global_state.cpp",
     '''        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
     '''        if (rejectZeroSizeAllocation(localAllocInfo, "before-allocate", false)) {
             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -815,6 +805,164 @@ edit(
                 return gate;
             }
         }''',
+)
+
+# The exact helper tested by CI is embedded in both allocation translation units.
+contract_header = (Path(__file__).resolve().parent / "host_memory_contract.h").read_text(encoding="utf-8")
+for rel, anchor in [
+    ("host/vulkan/vk_decoder_global_state.cpp", '#include "vk_decoder_global_state.h"'),
+    ("host/vulkan/vk_common_operations.cpp", '#include <algorithm>'),
+]:
+    edit(rel, anchor, anchor + "\n" + contract_header.replace("#pragma once\n", ""))
+
+# Delete the entire private-only query and silent fallback, not just its message.
+decoder_path = root / "host/vulkan/vk_decoder_global_state.cpp"
+decoder = decoder_path.read_text(encoding="utf-8")
+start = decoder.index('                VkMemoryHostPointerPropertiesEXT memoryHostPointerProperties = {')
+end = decoder.index('                vk_append_struct(&structChainIter, &importHostInfo);', start)
+edit("host/vulkan/vk_decoder_global_state.cpp", decoder[start:end], "")
+
+# Preflight the original guest selection before ANY descriptor duplication, alias
+# lookup side effects, backing creation or pool reservation. Use physical flags,
+# not getHostMemoryInfoFromGuestMemoryTypeIndex's possible shadow flag override.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+        auto device = unbox_VkDevice(boxed_device);
+        auto vk = dispatch_VkDevice(boxed_device);''',
+    '''        *pMemory = VK_NULL_HANDLE;
+        if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+        auto device = unbox_VkDevice(boxed_device);
+        auto vk = dispatch_VkDevice(boxed_device);
+        // Alias metadata lookup borrows existing backing; no dup/acquire/invalidation.
+        uint32_t selectedGuestIndex = pAllocateInfo->memoryTypeIndex;
+        VkDeviceSize aliasSize = 0;
+        bool aliasDedicated = false;
+        void* aliasMapped = nullptr;
+        const auto* preflightCb = vk_find_struct<VkImportColorBufferGOOGLE>(pAllocateInfo);
+        const auto* preflightBuffer = vk_find_struct<VkImportBufferGOOGLE>(pAllocateInfo);
+        if (preflightCb) {
+            m_vkEmulation->getColorBufferAllocationInfo(preflightCb->colorBuffer, &aliasSize,
+                &selectedGuestIndex, &aliasDedicated, &aliasMapped);
+        } else if (preflightBuffer) {
+            m_vkEmulation->getBufferAllocationInfo(preflightBuffer->buffer, &aliasSize,
+                &selectedGuestIndex, &aliasDedicated);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
+            if (!deviceInfo) return VK_ERROR_DEVICE_LOST;
+            auto* physicalDeviceInfo = gfxstream::base::find(mPhysdevInfo, deviceInfo->physicalDevice);
+            if (!physicalDeviceInfo) return VK_ERROR_DEVICE_LOST;
+            const auto& helper = *physicalDeviceInfo->memoryPropertiesHelper;
+            const auto& guest = helper.getGuestMemoryProperties();
+            const auto selected = helper.getHostMemoryInfoFromGuestMemoryTypeIndex(
+                selectedGuestIndex);
+            if (!selected || pAllocateInfo->memoryTypeIndex >= guest.memoryTypeCount) {
+                return VK_ERROR_INCOMPATIBLE_DRIVER;
+            }
+            const auto physical = helper.getHostMemoryInfoFromHostMemoryTypeIndex(selected->index);
+            if (!physical) return VK_ERROR_INCOMPATIBLE_DRIVER;
+            const VkResult coherentContract = validateHostCoherentContract(
+                guest.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags,
+                physical->memoryType.propertyFlags);
+            if (coherentContract != VK_SUCCESS) {
+                GFXSTREAM_ERROR("COHERENT-DOWNGRADE-REJECT: guestIndex=%u hostIndex=%u "
+                                "guestFlags=0x%x physicalFlags=0x%x result=%d",
+                                pAllocateInfo->memoryTypeIndex, physical->index,
+                                guest.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags,
+                                physical->memoryType.propertyFlags, (int)coherentContract);
+                return coherentContract;
+            }
+        }''',
+)
+
+# Recheck the actual transformed host selection with physical flags. Leave the
+# separate shadow-routing flags unchanged; never add HOST_COHERENT to either.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''            localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
+            memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;''',
+    '''            const auto physicalHostMemory = physicalDeviceInfo->memoryPropertiesHelper
+                ->getHostMemoryInfoFromHostMemoryTypeIndex(hostMemoryInfo.index);
+            if (!physicalHostMemory) return VK_ERROR_INCOMPATIBLE_DRIVER;
+            const VkResult coherentContract = validateHostCoherentContract(
+                guestMemoryPropertyFlags, physicalHostMemory->memoryType.propertyFlags);
+            if (coherentContract != VK_SUCCESS) return coherentContract;
+            localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
+            memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;''',
+)
+
+# Central validation sees the finished chain, irrespective of pointer value or
+# producer (SystemBlob, private allocation, ColorBuffer/Buffer HostAllocation).
+# These pointer branches are exclusive of fd/pool producers in this pinned source.
+# Fail closed on a mixed chain too; only the local fd/pool state is owned here.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);',
+    '''        const auto* actualHostImport =
+            vk_find_struct<VkImportMemoryHostPointerInfoEXT>(&localAllocInfo);
+        uint32_t hostPointerBits = 0;
+        VkResult hostPointerQuery = VK_ERROR_EXTENSION_NOT_PRESENT;
+        VkResult hostPointerValidation = validateHostPointerImport(
+            device, actualHostImport, localAllocInfo.memoryTypeIndex,
+            vk->vkGetMemoryHostPointerPropertiesEXT, &hostPointerBits, &hostPointerQuery);
+#ifndef _WIN32
+        if (actualHostImport && (diagnosticFdInfo || poolOffset >= 0)) {
+            hostPointerValidation = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        }
+#endif
+        if (hostPointerValidation != VK_SUCCESS) {
+#ifndef _WIN32
+            // importFdInfo is local owned import state, never a borrowed pointer owner.
+            if (importFdInfo.fd >= 0) {
+                close(importFdInfo.fd);
+                importFdInfo.fd = -1;
+            }
+            if (poolOffset >= 0) {
+                if (auto* rejectedPool = HostVisiblePool::get()) {
+                    rejectedPool->free({{(uint64_t)poolOffset, poolSize}});
+                }
+                poolOffset = -1;
+                poolSize = 0;
+            }
+#endif
+            GFXSTREAM_ERROR("HOSTPTR-INDEX-REJECT: pointer=%p type=0x%x index=%u bits=0x%x "
+                            "query=%d no-index-or-flags-rewrite result=%d",
+                            actualHostImport ? actualHostImport->pHostPointer : nullptr,
+                            actualHostImport ? actualHostImport->handleType : 0,
+                            localAllocInfo.memoryTypeIndex, hostPointerBits, (int)hostPointerQuery,
+                            (int)hostPointerValidation);
+            *pMemory = VK_NULL_HANDLE;
+            return hostPointerValidation; // sharedMemory/privateMemory release by RAII only.
+        }
+        VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+)
+
+# Internal HostAllocation aliases also validate their actual final chain. No fd
+# duplicate/AHB acquire is possible in this switch case; existing failure cleanup
+# below handles the other cases. The external pointer remains borrowed.
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    '''    auto handleInfo = info->handleInfo;
+
+    // Declare structures''',
+    '''    *out = VK_NULL_HANDLE;
+    auto handleInfo = info->handleInfo;
+
+    // Declare structures''',
+)
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    '    VkResult res = vk->vkAllocateMemory(targetDevice, &allocInfo, nullptr, out);',
+    '''    const auto* actualHostImport = vk_find_struct<VkImportMemoryHostPointerInfoEXT>(&allocInfo);
+    uint32_t hostPointerBits = 0;
+    VkResult res = validateHostPointerImport(
+        targetDevice, actualHostImport, allocInfo.memoryTypeIndex,
+        vk->vkGetMemoryHostPointerPropertiesEXT, &hostPointerBits);
+    if (res == VK_SUCCESS) {
+        res = vk->vkAllocateMemory(targetDevice, &allocInfo, nullptr, out);
+    }''',
 )
 
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.
