@@ -135,7 +135,7 @@ jobs:
           p.write_text(s)
           p = Path('source/src/crosvm/sys/linux/device_helpers.rs')
           s = p.read_text()
-          old = 'pub fn create_unprivileged_virtio_snd_device('
+          old = '\nfn create_unprivileged_virtio_snd_device('
           assert s.count(old) == 1
           p.write_text(s.replace(old, '#[cfg(feature = "audio")]\n' + old))
           PY
