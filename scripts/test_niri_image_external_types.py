@@ -22,10 +22,10 @@ assert 'importFdInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
 assert 'validateHostVisibleDmaBufImport(' in decoder and 'validateHostCoherentContract(' in decoder
 assert 'rejectZeroSizeAllocation(*pAllocateInfo, "entry", true)' in decoder
 # Common aliases continue to map opaque/AHB through the existing platform policy;
-# explicit DMA_BUF has no rewrite in that function.
+# supported explicit DMA_BUF is preserved; unsupported hosts retain their legacy fallback.
 a = common.index('VkExternalMemoryHandleTypeFlags VkEmulation::transformExternalMemoryHandleTypeFlags_tohost(')
 b = common.index('VkExternalMemoryHandleTypeFlags VkEmulation::transformExternalMemoryHandleTypeFlags_fromhost(', a)
-assert 'VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT' not in common[a:b]
+assert 'if (!mDeviceInfo.supportsDmaBuf && (bits & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT))' in common[a:b]
 # The harness compiles the exact final production snippets above, not a reimplementation.
 harness = r'''#include <vulkan/vulkan.h>
 #include <cassert>
