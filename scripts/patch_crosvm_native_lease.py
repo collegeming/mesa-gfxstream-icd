@@ -126,7 +126,10 @@ def main():
     # raw MAP additionally verifies the actual installed mapper and host ack epoch.
     main_gpu = root / 'src/crosvm/sys/linux/gpu.rs'
     s = main_gpu.read_text()
-    s = replace(s, '    #[allow(unused_mut)]\n    let mut dev = virtio::Gpu::new(', '''    let native_lease_offer = matches!(cfg.hypervisor,
+    s = replace(s, '    #[allow(unused_mut)]\n    let mut dev = virtio::Gpu::new(', '''    #[cfg(not(feature = "gfxstream"))]
+    let native_lease_offer = false;
+    #[cfg(feature = "gfxstream")]
+    let native_lease_offer = matches!(cfg.hypervisor,
         Some(crate::crosvm::config::HypervisorKind::Kvm { .. }))
         && !is_sandboxed && !gpu_params.fixed_blob_mapping && !gpu_params.udmabuf
         && !gpu_params.external_blob && render_server_fd.is_none() && !has_vfio_gfx_device

@@ -132,10 +132,10 @@ def main():
             "native mapping snapshot/restore is not negotiated");
         assert!(self.scanout_data.is_none());''')
     s += '''
-// VM-control may no longer be serviced during worker teardown. Do not issue a blocking
-// detach request here or destroy the renderer while KVM can still reference its pointers.
-// This deliberately retains the renderer until process exit; orderly VM retirement with
-// explicit detach acknowledgements is a remaining integration requirement, not success.
+// Normal Worker::run exit retires mappings before reaching Drop, while the independent
+// VM-memory handler is alive. Never issue blocking control IPC from exceptional Drop:
+// it may run during an unwind after the control service has failed. Any unresolved lease
+// deliberately retains the renderer until process exit; that error is not clean retirement.
 impl Drop for VirtioGpu {
     fn drop(&mut self) {
         if self.resources.values().any(|r| blob_detach::active(r.shmem_offset,
