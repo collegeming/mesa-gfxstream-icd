@@ -1,0 +1,99 @@
+name: build-guest-native-first-touch
+
+on:
+  push:
+    branches: [diagnostic/guest-native-first-touch]
+    paths:
+      - 'diagnostic/guest_native_first_touch.c'
+      - 'diagnostic/test_guest_native_first_touch.c'
+      - 'diagnostic/check_guest_native_first_touch.py'
+      - '.github/workflows/build-guest-native-first-touch.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests-and-guest-compile-only:
+    if: github.ref == 'refs/heads/diagnostic/guest-native-first-touch'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and sanitizer dependencies
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils file libvulkan-dev python3
+      - name: Structural safety and actual production CPU helper tests only
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_guest_native_first_touch.py diagnostic/guest_native_first_touch.c | tee out/source-safety.txt
+          gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            diagnostic/test_guest_native_first_touch.c -o out/cpu-helper-test
+          nm -u out/cpu-helper-test | tee out/cpu-helper-imports.txt
+          if grep -Eq '\bvk[A-Z]|libvulkan' out/cpu-helper-imports.txt; then exit 1; fi
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ./out/cpu-helper-test | tee out/cpu-helper-tests.txt
+          python3 -I - <<'PY' | tee out/cpu-stage-order.txt
+          import pathlib, re
+          text = pathlib.Path('out/cpu-helper-tests.txt').read_text()
+          assert text.count('stage=touch-bounds FAIL') == 7
+          assert re.findall(r'BEGIN stage=(\S+)', text) == ['first-read', 'first-write', 'first-readback', 'last-write', 'last-readback']
+          assert 'RESULT stage=first-readback PASS' in text
+          assert 'RESULT stage=last-readback PASS' in text
+          print('PASS production helper stage order, bounds rejection and marker readback on ordinary CPU array only')
+          PY
+      - name: Compile guest binary and inspect ELF only (NEVER execute)
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" diagnostic/guest_native_first_touch.c \
+            -o out/guest_native_first_touch -lvulkan 2>&1 | tee out/compiler.log
+          file out/guest_native_first_touch | tee out/binary-info.txt
+          readelf -h -l -d -V -n out/guest_native_first_touch | tee out/elf-info.txt
+          nm -u out/guest_native_first_touch | tee out/undefined-symbols.txt
+          python3 -I diagnostic/check_guest_native_first_touch.py diagnostic/guest_native_first_touch.c \
+            out/undefined-symbols.txt out/elf-info.txt | tee out/symbol-safety.txt
+      - name: Package reviewed source workflow tests provenance and hashes
+        run: |
+          set -euo pipefail
+          {
+            printf 'probe=guest-native-first-touch-v1\nrepository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'run=%s/%s/actions/runs/%s\nattempt=%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseCommit=e37f1c1370112989fd7821d1290236096497b4c9\nrunner=ubuntu-24.04-arm\n'
+            uname -a
+            gcc --version
+            ldd --version
+            dpkg-query -W libc6 libvulkan-dev libvulkan1
+            printf 'guestCompile=gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now -DPROBE_REVISION=commit -lvulkan\n'
+            printf 'execution=guest binary NEVER executed; actual production helper tested ASan/UBSan on ordinary initialized CPU array only, no Vulkan headers/link in helper test\n'
+            printf 'boundary=ordinary allocation4096 type8 actual guest HOST_VISIBLE|HOST_COHERENT pNextNULL; one map; five volatile uint32 scalar operations at0/4092; unmap/free/destroy; no application GPU workload\n'
+            printf 'limits=CPU self-readback NOT GPU coherence proof; driver-internal activity possible; internal blob may be larger; no root first-fault/backing/renderer proof before real run\n'
+            printf 'review=parent source safety review and explicit CPU authorization mandatory before device; --allow-cpu-first-touch is NOT GPU consent; no automatic retry; timeout cannot guarantee recovery from kernel hang\n'
+            printf 'selection=VK_DRIVER_FILES=/opt/droidvm-mesa-reference/icd.json; LD_LIBRARY_PATH first entry=/opt/droidvm-mesa-reference/usr/local/lib/aarch64-linux-gnu; selectors do not prove library identity\n'
+          } | tee out/build-provenance.txt
+          cp diagnostic/guest_native_first_touch.c diagnostic/test_guest_native_first_touch.c \
+            diagnostic/check_guest_native_first_touch.py .github/workflows/build-guest-native-first-touch.yml out/
+          rm out/cpu-helper-test
+          (cd out && sha256sum guest_native_first_touch guest_native_first_touch.c test_guest_native_first_touch.c \
+            check_guest_native_first_touch.py build-guest-native-first-touch.yml compiler.log binary-info.txt elf-info.txt \
+            undefined-symbols.txt source-safety.txt symbol-safety.txt cpu-helper-imports.txt cpu-helper-tests.txt \
+            cpu-stage-order.txt build-provenance.txt > SHA256SUMS)
+          tar -czf guest-native-first-touch-aarch64-glibc.tar.gz -C out .
+          sha256sum guest-native-first-touch-aarch64-glibc.tar.gz | tee guest-native-first-touch-aarch64-glibc.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-native-first-touch-aarch64-glibc
+          path: |
+            guest-native-first-touch-aarch64-glibc.tar.gz
+            guest-native-first-touch-aarch64-glibc.tar.gz.sha256
+            out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
