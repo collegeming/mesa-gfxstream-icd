@@ -202,4 +202,13 @@ edit(
     "            decoder_profile.cpp\n            dependency_graph.cpp",
 )
 
+# Its unused helper is accepted by Android.bp but triggers CMake's -Werror.
+# Limit this diagnostic exception to the existing profiler translation unit.
+edit(
+    "host/vulkan/CMakeLists.txt",
+    "set_source_files_properties(vk_decoder.cpp PROPERTIES COMPILE_FLAGS -Wno-unused-variable)",
+    """set_source_files_properties(decoder_profile.cpp PROPERTIES COMPILE_FLAGS -Wno-unused-function)
+set_source_files_properties(vk_decoder.cpp PROPERTIES COMPILE_FLAGS -Wno-unused-variable)""",
+)
+
 print("done")
