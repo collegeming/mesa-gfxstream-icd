@@ -141,7 +141,7 @@ jobs:
           printf "[binaries]\nc = '%s'\ncpp = '%s'\nar = '%s'\nstrip = '%s'\npkg-config = '/usr/bin/pkg-config'\n[properties]\npkg_config_libdir = '%s/lib/pkgconfig'\n[host_machine]\nsystem = 'android'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'\n" "$CC" "$CXX" "$AR" "$TC/bin/llvm-strip" "$PREFIX" > wayland-cross.ini
           meson setup wayland-build wayland-source --cross-file wayland-cross.ini --prefix "$PREFIX" --default-library static -Dscanner=false -Dtests=false -Ddocumentation=false -Ddtd_validation=false
           ninja -C wayland-build src/libwayland-client.a
-          cp wayland-build/src/libwayland-client.a wayland-build/src/libwayland-private.a wayland-build/src/libwayland-util.a "$PREFIX/lib/libffi.a" native-libs/
+          cp wayland-build/src/libwayland-client.a "$PREFIX/lib/libffi.a" native-libs/
           find wayland-build -name '*.a' -print | tee evidence/wayland-static-archives.txt
           sha256sum native-libs/* | tee evidence/native-checksums.txt
       - name: Android Cargo check discovery (real native build scripts, no stubs)
@@ -239,7 +239,7 @@ jobs:
           s = p.read_text()
           old = 'println!("cargo:rustc-link-lib=dylib=wayland-client");'
           assert s.count(old) == 1
-          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=wayland-private");\n    println!("cargo:rustc-link-lib=static=wayland-util");\n    println!("cargo:rustc-link-lib=static=ffi");'))
+          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=ffi");'))
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
