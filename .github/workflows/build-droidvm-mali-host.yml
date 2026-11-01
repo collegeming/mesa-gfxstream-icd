@@ -343,7 +343,7 @@ jobs:
                   "payload": "Exactly two volatile32 reads at0/4092; writes replies only if both request constants match; mismatch/exhaustion validation error only scoped diagnostic",
                   "requests": ["0x13579bdf", "0x2468ace0"],
                   "replies": ["0x89abcdef", "0xfedcba98"],
-                  "boundary": "CPU crossview diagnostic only; no GPU coherence claim; no extra cache maintenance; device execution needs separate authorization",
+                  "boundary": "CPU crossview after the existing native flush only; no GPU coherence or maintenance-free coherency claim; no additional cache maintenance; device execution needs separate authorization",
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['native_cpu_crossview.h', 'patch_native_cpu_crossview.py',
                                           'test_native_cpu_crossview.cpp', 'test_native_cpu_crossview_integration.py',

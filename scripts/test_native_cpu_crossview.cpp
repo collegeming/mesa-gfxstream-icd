@@ -53,6 +53,10 @@ int main() {
     }
     Budget nullBudget;
     assert(exchange(validGuard, nullptr, nullBudget, seen) == Result::Invalid);
+    Budget overflowBudget;
+    auto* overflow = reinterpret_cast<void*>(UINTPTR_MAX - 3);
+    assert(exchange(validGuard, overflow, overflowBudget, seen) == Result::Invalid);
+    assert(overflowBudget.consume()); // overflow rejected without access or budget consumption
     Budget concurrent;
     std::atomic<unsigned> winners{0};
     std::vector<std::thread> threads;
