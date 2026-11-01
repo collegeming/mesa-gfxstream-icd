@@ -1,0 +1,72 @@
+name: build-mali-heap-query
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64-query-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce allocation and query only source boundary
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          import pathlib, re
+          source = pathlib.Path('diagnostic/mali_heap_query.c').read_text()
+          clean = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
+          forbidden = r'\b(?:vkAllocateMemory|vkFreeMemory|vkCreateBuffer|vkCreateImage|vkBind\w*|vkMap\w*|vkUnmap\w*|vkGetDeviceQueue\w*|vkQueue\w*|vkCmd\w*|vkCreateCommand\w*|vkAllocateCommand\w*|vkCreateFence|vkWaitForFences|vkDeviceWaitIdle|vkCreateShader\w*|vkCreate\w*Pipeline\w*|vkFlush\w*|vkInvalidate\w*|mmap|mmap64|memcpy|memmove|memset|write|pwrite|read|pread|system|popen|exec\w*|DMA_BUF_IOCTL_SYNC)\s*\('
+          assert not re.search(forbidden, clean), 'Forbidden operation in query-only source'
+          allowed = {'vkGetInstanceProcAddr', 'vkGetDeviceProcAddr', 'vkCreateInstance', 'vkDestroyInstance', 'vkEnumeratePhysicalDevices', 'vkGetPhysicalDeviceProperties', 'vkGetPhysicalDeviceMemoryProperties', 'vkEnumerateDeviceExtensionProperties', 'vkGetPhysicalDeviceQueueFamilyProperties', 'vkCreateDevice', 'vkDestroyDevice'}
+          calls = set(re.findall(r'\b(vk\w+)\s*\(', clean))
+          assert calls <= allowed, f'Unexpected Vulkan calls: {calls - allowed}'
+          heaps = re.findall(r'"(/dev/dma_heap/[^"\n]+)"', source)
+          assert heaps == ['/dev/dma_heap/system', '/dev/dma_heap/system-uncached'], heaps
+          assert 'resourceCompatibility=UNKNOWN' in source
+          print('PASS: source boundary and exact heap allowlist; no execution')
+          PY
+      - name: Select pinned NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -f "$NDK/source.properties" ]; then
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.2.12479018'
+          fi
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
+      - name: Crossbuild Android binary without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir out
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          {
+            printf 'commit=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            cat "$NDK/source.properties"
+            "$CC" --version
+            printf 'target=android-arm64-api33; query-only; no binary execution in CI\n'
+          } | tee out/build-info.txt
+          "$CC" -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" \
+            diagnostic/mali_heap_query.c -o out/mali_heap_query -lvulkan \
+            2>&1 | tee out/compiler.log
+          cp diagnostic/mali_heap_query.c out/
+          file out/mali_heap_query | tee out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h -d out/mali_heap_query | tee -a out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --undefined-only out/mali_heap_query | tee out/imported-symbols.txt
+          if grep -E 'vk(AllocateMemory|FreeMemory|CreateBuffer|CreateImage|Bind|Map|Unmap|GetDeviceQueue|Queue|Cmd|CreateCommand|AllocateCommand|CreateFence|WaitForFences|DeviceWaitIdle|CreateShader|Create.*Pipeline|Flush|Invalidate)|[[:space:]](mmap|mmap64|memcpy|memmove|memset|write|pwrite|read|pread|system|popen|exec[^[:space:]]*)(@[^[:space:]]*)?$' out/imported-symbols.txt; then
+            printf 'Forbidden imported symbol\n' >&2
+            exit 1
+          fi
+          (cd out && sha256sum mali_heap_query mali_heap_query.c build-info.txt binary-info.txt compiler.log imported-symbols.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mali-heap-query-android-arm64-api33
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
