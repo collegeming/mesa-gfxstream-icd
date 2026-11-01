@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -22,6 +22,7 @@ on:
       - 'scripts/*native_cpu_prefault*'
       - 'scripts/*niri_image_external_types*'
       - 'scripts/*niri_image_query_trace*'
+      - 'scripts/*classic_image_bridge*'
 
 permissions:
   contents: read
@@ -248,6 +249,19 @@ jobs:
             "$RUNNER_TEMP/test-niri-image-types.cpp" -o "$RUNNER_TEMP/test-niri-image-types"
           "$RUNNER_TEMP/test-niri-image-types"
 
+      - name: Apply CIB1 host export-only bridge and test paired boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I ci/scripts/patch_classic_image_bridge.py source
+          python3 -I ci/scripts/test_classic_image_bridge_integration.py source | tee out/classic-image-bridge-tests.txt
+          c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ivulkan-headers/include -Ici/scripts ci/scripts/test_classic_image_bridge.cpp -o "$RUNNER_TEMP/test-classic-image-bridge"
+          "$RUNNER_TEMP/test-classic-image-bridge"
+          git -C source diff --check
+          git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
+          cp ci/scripts/*classic_image_bridge* out/
+
       - name: Fetch Android NDK r27c
         shell: bash
         run: |
@@ -428,6 +442,17 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_image_query_trace.py', 'test_niri_image_query_trace.py',
                                           'niri-image-query-trace-tests.txt']}
+              },
+              "classic_image_bridge": {
+                  "default_enabled": False,
+                  "feature": "ClassicImageBridge (renderer feature); CIB1 capset exact version1/magic43494231 + private query/create NativeBuffer markers required",
+                  "scope": "niri export-only classic RGBA/BGRA8 dedicated2D single sample/mip/layer; CPU mapping rejected; actual AHB backing size and DEVICE_LOCAL-only shadow of exact physical type",
+                  "protocol": "capset prefix120 preserved, version@120/contract@124 size128; consumer4349423100000001, producer0; resource id uint32 in existing NativeBuffer handle wire",
+                  "boundary": "New paired bridge requires matching guest; no runtime/desktop acceptance claimed by Actions; imported external memory unsupported",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['classic_image_bridge.h', 'patch_classic_image_bridge.py',
+                                          'test_classic_image_bridge.cpp', 'test_classic_image_bridge_integration.py',
+                                          'classic-image-bridge-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
