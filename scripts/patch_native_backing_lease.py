@@ -96,6 +96,7 @@ edit(decoder, '        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;'
                 createBlobInfoPtr ? createBlobInfoPtr->blobMem : 0,
                 createBlobInfoPtr ? createBlobInfoPtr->blobFlags : 0);
         if (nativeAllocation) {
+            std::lock_guard<std::mutex> nativeLock(native::Session::get().lifecycle);
             auto* nativeDevice = gfxstream::base::find(mDeviceInfo, device);
             auto* nativeInstance = nativeDevice ?
                 gfxstream::base::find(mInstanceInfo, nativeDevice->parentInstance) : nullptr;
@@ -153,7 +154,8 @@ edit(decoder, '''        if (info->needUnmap) {
             uint64_t hva''')
 edit(decoder, '''            ExternalObjectManager::get()->addMapping(virtioGpuContextId, hostBlobId,
                                                      (void*)(uintptr_t)alignedHva, info->caching);''', '''            const long nativePage = sysconf(_SC_PAGESIZE);
-            if (!native::publicationReady() || !info->nativeOwner || nativePage <= 0 ||
+            std::lock_guard<std::mutex> nativeLock(native::Session::get().lifecycle);
+            if (!info->nativeOwner || !native::Session::get().ready(info->nativeOwner->epoch()) || nativePage <= 0 ||
                 !native::validExtent(*info->nativeOwner, info->size, nativePage) ||
                 !ExternalObjectManager::get()->addMapping(virtioGpuContextId, hostBlobId,
                                                           info->nativeOwner, info->caching)) {
@@ -230,7 +232,8 @@ edit(resource_h, '    int Map(void** outAddress, uint64_t* outSize);', '    int 
 edit(resource_h, '    std::optional<BlobMemory> mBlobMemory;', '    std::optional<BlobMemory> mBlobMemory;\n    native::MapState mNativeMapState;')
 edit(resource, '''        hva = memory.addr;
         hvaSize = mCreateBlobArgs->size;''', '''        const long page = sysconf(_SC_PAGESIZE);
-        if (!native::publicationReady() || !memory.owner ||
+        std::lock_guard<std::mutex> nativeLock(native::Session::get().lifecycle);
+        if (!memory.owner || !native::Session::get().ready(memory.owner->epoch()) ||
             memory.generation != memory.owner->generation() || page <= 0 ||
             !mNativeMapState.map(*memory.owner, mCreateBlobArgs->size, page)) {
             if (outAddress) *outAddress = nullptr;
@@ -318,4 +321,44 @@ edit('host/virtio_gpu_frontend.cpp', '''    destroyVirtioGpuObjects();
     if (ret) return ret;
 
     ret = restoreRenderer(directory);''')
-print('Applied native allocation ownership; raw publication intentionally fail-closed')
+# Paired init negotiation: stack-local offer, no descriptor pointer retained.
+renderer = 'host/virtio_gpu_gfxstream_renderer.cpp'
+edit(renderer, '#include <cstdint>', '#include <cstdint>\n#include "gfxstream/host/external_object_manager.h"')
+edit(renderer, '''    // Required parameters.
+    std::unordered_set<uint64_t> required_params''', '''    gfxstream::host::native::Initialization nativeInitialization;
+    if (!nativeInitialization.started()) return -EBUSY;
+    gfxstream::host::native::Offer nativeOffer;
+    // Required parameters.
+    std::unordered_set<uint64_t> required_params''')
+edit(renderer, '''        switch (param.key) {
+            case STREAM_RENDERER_PARAM_NULL:''', '''        if (!nativeOffer.parse(param.key, param.value)) return -EINVAL;
+        switch (param.key) {
+            case gfxstream::host::native::kLeaseParam:
+                break;
+            case STREAM_RENDERER_PARAM_NULL:''')
+edit(renderer, '''    GFXSTREAM_INFO("Gfxstream initialized successfully!");''', '''    nativeInitialization.success(nativeOffer); // accepted written last, only on real init success
+    GFXSTREAM_INFO("Gfxstream initialized successfully!");''')
+edit(renderer, '''    sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);
+    return 0;''', '''    return sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);''')
+edit('host/virtio_gpu_frontend.cpp', '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    for''', '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    {
+        std::lock_guard<std::mutex> lock(native::Session::get().lifecycle);
+        native::Session::get().revoke(); // reset/restore require a new init epoch
+    }
+    for''')
+edit('host/virtio_gpu_frontend.cpp', '''    native::Reclaimer::get().drain(); // producers stopped; no decoder/manager locks
+}''', '''    native::Reclaimer::get().drain(); // producers stopped; no decoder/manager locks
+    { std::lock_guard<std::mutex> lock(native::Session::get().lifecycle);
+      native::Session::get().stopped(); }
+}''')
+# Native pointers are not serializable across restore. Refuse before snapshot work.
+edit('host/virtio_gpu_frontend.cpp', '''int VirtioGpuFrontend::snapshot(const char* directory) {''', '''int VirtioGpuFrontend::snapshot(const char* directory) {
+    for (const auto& [id, resource] : mResources) {
+        if (resource.HasNativeBacking()) return -EBUSY;
+    }''')
+edit(resource_h, '    bool HasActiveNativeMap() const { return mNativeMapState.active(); }', '''    bool HasActiveNativeMap() const { return mNativeMapState.active(); }
+    bool HasNativeBacking() const {
+        return mBlobMemory && std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory);
+    }''')
+print('Applied paired native allocation ownership; native mapping requires exact init contract')
