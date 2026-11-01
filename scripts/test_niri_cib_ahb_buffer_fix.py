@@ -47,16 +47,14 @@ alloc = ops[ops.index('bool VkEmulation::allocExternalMemory('):
 assert alloc.count('CIB1-DIAG-BUF-VK-AHB-EXPORT-SKIPPED') == 1
 assert 'CIB1-DIAG-BUF-VK-AHB-EXPORT-SKIPPED: size=%llu' in alloc
 assert alloc.count('ahbSkipDiagnostics.fetch_add(1, std::memory_order_relaxed) < 16') == 1
-skip = alloc.split('            if (!colorBufferInfo) {', 1)
-assert len(skip) == 2
-skip_block = skip[1][:skip[1].index('            }')]
-assert 'CIB1-DIAG-BUF-VK-AHB-EXPORT-SKIPPED' in skip_block
-assert 'return true;' in skip_block
 # The export call remains after the skip and is still used by the image/ColorBuffer path.
-export_pos = alloc.index('vkGetMemoryAndroidHardwareBufferANDROID')
+export_pos = alloc.index('vk->vkGetMemoryAndroidHardwareBufferANDROID(')
 skip_pos = alloc.index('if (!colorBufferInfo) {')
 assert skip_pos < export_pos
-assert alloc.count('vkGetMemoryAndroidHardwareBufferANDROID') == 1
+skip_to_export = alloc[skip_pos:export_pos]
+assert 'CIB1-DIAG-BUF-VK-AHB-EXPORT-SKIPPED' in skip_to_export
+assert 'return true;' in skip_to_export
+assert alloc.count('vk->vkGetMemoryAndroidHardwareBufferANDROID(') == 1
 assert 'if (colorBufferInfo) {' in alloc[export_pos:]
 assert 'externalMemoryCompatible = true;' in alloc
 # The ColorBuffer allocation context still passes its ColorBufferInfo; buffers do not.
