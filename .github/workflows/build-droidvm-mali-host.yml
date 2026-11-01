@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/niri-cib-ring-ping-trace]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -29,6 +29,7 @@ on:
       - 'scripts/*niri_cib_resource_diag*'
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
+      - 'scripts/*niri_cib_ring_ping_trace*'
 
 permissions:
   contents: read
@@ -276,6 +277,8 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_buffer_trace.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-buffer-trace-tests.txt
           python3 -I ci/scripts/patch_niri_cib_ahb_buffer_fix.py source
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
+          python3 -I ci/scripts/patch_niri_cib_ring_ping_trace.py source
+          python3 -I ci/scripts/test_niri_cib_ring_ping_trace.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ring-ping-trace-tests.txt
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
@@ -285,6 +288,7 @@ jobs:
           cp ci/scripts/*niri_cib_resource_diag* out/
           cp ci/scripts/*niri_cib_buffer_trace* out/
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
+          cp ci/scripts/*niri_cib_ring_ping_trace* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -382,7 +386,8 @@ jobs:
                   "Fall back to plain image-format properties when the external query rejects an entry; mark it supported without claiming external memory",
                   "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only",
                   "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change",
-                  "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains"
+                  "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains",
+                  "Bounded ASG command/ping/notify/park/wakeup diagnostics for the guest ring lost-wakeup; logging only"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -545,6 +550,16 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_cib_ahb_buffer_fix.py', 'test_niri_cib_ahb_buffer_fix.py',
                                           'niri-cib-ahb-buffer-fix-tests.txt']}
+              },
+              "niri_cib_ring_ping_trace": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NIRI_IMAGE_TRACE exactly1; process-wide bounded records at the ASG command/consumer sites",
+                  "bound": "At most32 records per site: ASG command, ping result, notify, park, wake",
+                  "content": "ASG command ctx/opcode/resource/context-found; ping result ctx/resource/ret; notify count and trySend success; park/wake ring write/read/state and config guest-write/host-consumed",
+                  "unchanged": "ASG command handling, CreateAddressSpaceGraphicsInstance/Ping results, trySend call, blocking receive and consumer command switch unchanged; ring reads are diagnostic only",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_niri_cib_ring_ping_trace.py', 'test_niri_cib_ring_ping_trace.py',
+                                          'niri-cib-ring-ping-trace-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
