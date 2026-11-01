@@ -194,4 +194,12 @@ elseif(LINUX)
         rt)""",
 )
 
+# 10. DroidVM's decoder references its existing profiling implementation, but
+# only Android.bp lists it. Add that same implementation to the CMake target.
+edit(
+    "host/vulkan/CMakeLists.txt",
+    "            dependency_graph.cpp",
+    "            decoder_profile.cpp\n            dependency_graph.cpp",
+)
+
 print("done")
