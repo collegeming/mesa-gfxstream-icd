@@ -140,8 +140,14 @@ jobs:
               "semantic_patches": [
                   "Do not advertise hasSetMetadataCommand (set to 0)",
                   "When AHB/image memory type intersection is zero, use ahbProps.memoryTypeBits",
-                  "Default renderer Android external memory mode to AndroidAHB; preserve explicit overrides"
+                  "Default renderer Android external memory mode to AndroidAHB; preserve explicit overrides",
+                  "Append GFXSTREAM_RENDERER_FEATURES after launcher renderer features",
+                  "Select existing Linux udmabuf creator on Android/Linux instead of stub",
+                  "Create sealable memfds and apply SHRINK|GROW seals only to shared-memory backing",
+                  "Log RingBlob and Android fillExportHandle type/handle/errno without changing AHB export semantics"
               ],
+              "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
+              "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
               "source_patch": "gfxstream-android-mali.patch (excludes separately pinned Vulkan-Headers replacement)",
               "validation": "GitHub Actions cross-build and ELF inspection only; no device/runtime test"
           }

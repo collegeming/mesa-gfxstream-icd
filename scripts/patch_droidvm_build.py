@@ -211,4 +211,22 @@ edit(
 set_source_files_properties(vk_decoder.cpp PROPERTIES COMPILE_FLAGS -Wno-unused-variable)""",
 )
 
+# 11. Select the real udmabuf creator only for Android/Linux, not all POSIX hosts.
+edit(
+    "common/base/CMakeLists.txt",
+    "    UdmabufCreator_stub.cpp\n    )",
+    "    )",
+)
+edit(
+    "common/base/CMakeLists.txt",
+    "set(gfxstream_common_base_posix_srcs",
+    """if(ANDROID OR LINUX)
+    list(APPEND gfxstream_common_base_srcs UdmabufCreator_linux.cpp)
+else()
+    list(APPEND gfxstream_common_base_srcs UdmabufCreator_stub.cpp)
+endif()
+
+set(gfxstream_common_base_posix_srcs""",
+)
+
 print("done")
