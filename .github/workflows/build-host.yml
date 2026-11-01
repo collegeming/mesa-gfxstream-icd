@@ -1,0 +1,63 @@
+name: build-host-gfxstream
+
+# Cross-compiles libgfxstream_backend.so for arm64-v8a Android (bionic) from
+# the collegeming/gfxstream fork (mali-compat branch). Kept here because
+# Actions is disabled on the fork itself.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: gfxstream ref to build
+        required: false
+        default: mali-compat
+  push:
+    paths:
+      - '.github/workflows/build-host.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gfxstream
+        uses: actions/checkout@v4
+        with:
+          repository: collegeming/gfxstream
+          ref: ${{ github.event.inputs.ref || 'mali-compat' }}
+
+      - name: Fetch Android NDK r27c
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$HOME"
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: Configure (CMake + NDK toolchain)
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-33 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STANDALONE=ON
+
+      - name: Build gfxstream_backend
+        run: |
+          set -euo pipefail
+          cmake --build build-android --target gfxstream_backend -j"$(nproc)"
+
+      - name: Show artifact
+        run: |
+          find build-android -name 'libgfxstream_backend.so' -exec ls -l {} \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libgfxstream_backend-android-arm64
+          path: build-android/**/libgfxstream_backend.so
+          if-no-files-found: error
+          retention-days: 14
