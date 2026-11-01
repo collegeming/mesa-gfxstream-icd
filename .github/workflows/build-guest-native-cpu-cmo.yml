@@ -1,0 +1,96 @@
+name: build-guest-native-cpu-cmo
+on:
+  push:
+    branches: [diagnostic/guest-native-cpu-cmo]
+    paths:
+      - 'diagnostic/guest_native_cpu_cmo.c'
+      - 'diagnostic/test_guest_native_cpu_cmo.c'
+      - 'diagnostic/check_guest_native_cpu_cmo.py'
+      - '.github/workflows/build-guest-native-cpu-cmo.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  array-tests-and-compile-only:
+    if: github.ref == 'refs/heads/diagnostic/guest-native-cpu-cmo'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 compile dependencies
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils file libvulkan-dev python3
+      - name: Check source and test only unchanged CPU array helper (CMO excluded)
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_guest_native_cpu_cmo.py diagnostic/guest_native_cpu_cmo.c | tee out/source-safety.txt
+          gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            diagnostic/test_guest_native_cpu_cmo.c -o out/cpu-helper-test
+          nm -u out/cpu-helper-test | tee out/cpu-helper-imports.txt
+          if grep -Eq '\bvk[A-Z]|libvulkan|sigaction|siglongjmp|pthread_sigmask' out/cpu-helper-imports.txt; then exit 1; fi
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ./out/cpu-helper-test | tee out/cpu-helper-tests.txt
+          python3 -I - <<'PY' | tee out/cpu-stage-order.txt
+          import pathlib, re
+          text = pathlib.Path('out/cpu-helper-tests.txt').read_text()
+          assert text.count('stage=word-bounds FAIL') == 14
+          assert re.findall(r'BEGIN stage=(\S+)', text) == ['request-first-write', 'request-last-write'] + ['reply-first-read', 'reply-last-read'] * 4
+          assert text.count('RESULT stage=reply-verify FAIL') == 3
+          assert text.count('RESULT stage=reply-verify PASS') == 1
+          print('PASS production word helper only; CMO and signal guard preprocessor-excluded, never executed; no integration claim')
+          PY
+      - name: Compile real CMO guest and inspect disassembly only (NEVER execute)
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now -pthread -ftls-model=local-exec \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" diagnostic/guest_native_cpu_cmo.c \
+            -o out/guest-native-cpu-cmo -lvulkan 2>&1 | tee out/compiler.log
+          file out/guest-native-cpu-cmo | tee out/binary-info.txt
+          readelf -h -l -d -V -n out/guest-native-cpu-cmo | tee out/elf-info.txt
+          nm -u out/guest-native-cpu-cmo | tee out/undefined-symbols.txt
+          objdump -d out/guest-native-cpu-cmo | tee out/disassembly.txt
+          python3 -I diagnostic/check_guest_native_cpu_cmo.py diagnostic/guest_native_cpu_cmo.c \
+            out/undefined-symbols.txt out/elf-info.txt out/disassembly.txt | tee out/binary-safety.txt
+      - name: Package binary source checks provenance and hashes
+        run: |
+          set -euo pipefail
+          {
+            printf 'probe=guest-native-cpu-cmo-v1\nrepository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'run=%s/%s/actions/runs/%s\nattempt=%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseCommit=9b14f5ea2a93079f00fedcdef3ad9c133b2a1397\nrunner=ubuntu-24.04-arm\n'
+            uname -a
+            gcc --version
+            dpkg-query -W libc6 libvulkan-dev libvulkan1
+            printf 'guestCompile=gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now -pthread -ftls-model=local-exec -DPROBE_REVISION=commit -lvulkan\n'
+            printf 'execution=guest binary and all CMO/signal-guard code NEVER executed; array helper only ASan/UBSan with CROSSVIEW_CPU_ONLY; no Vulkan linkage or CMO substitute in guest binary\n'
+            printf 'scope=type8 ordinary allocation4096 map0/4096; two aligned32 request writes; DSB SY, CIVAC base, CIVAC base+4092, DSB SY; one synchronous flush; two reply reads only on VK_SUCCESS; no GPU resources, queue retrieval or submission\n'
+            printf 'signalGuard=SIGILL/SIGBUS/SIGSEGV only while short CMO guard; pthread_sigmask blocked install/restore, executable local-exec TLS jump/armed/signal, sigsetjmp before arm; unrelated unarmed worker signal failclosed _Exit; recorded signal causes failure cleanup without flush/retry/pass; setup/restore errors fail closed\n'
+            printf 'hostContract=UNCHANGED host897060acd243048d7dcae7ae29ed9a031225ab1d; exact app guest-native-cpu-crossview and GFXSTREAM_NATIVE_CPU_CROSSVIEW=1; native flush success, owner/epoch/unbound/exact4096 and request-match gates preserved\n'
+            printf 'binary=guest-native-cpu-cmo\nCLI=--allow-cpu-cmo\napplicationName=guest-native-cpu-crossview\n'
+            printf 'limits=explicit maintenance diagnostic NOT production coherent fix or FWB proof; signal handlers cannot recover kernel hang/reboot or all asynchronous errors; driver-internal activity possible\n'
+            printf 'review=parent source review before publication/device use; authorization managed by parent; this build performs no device execution or GPU test\n'
+          } | tee out/build-provenance.txt
+          cp diagnostic/guest_native_cpu_cmo.c diagnostic/test_guest_native_cpu_cmo.c \
+            diagnostic/check_guest_native_cpu_cmo.py .github/workflows/build-guest-native-cpu-cmo.yml out/
+          rm out/cpu-helper-test
+          (cd out && sha256sum * | tee SHA256SUMS)
+          tar -czf guest-native-cpu-cmo-aarch64-glibc.tar.gz -C out .
+          sha256sum guest-native-cpu-cmo-aarch64-glibc.tar.gz | tee guest-native-cpu-cmo-aarch64-glibc.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-native-cpu-cmo-aarch64-glibc
+          path: |
+            guest-native-cpu-cmo-aarch64-glibc.tar.gz
+            guest-native-cpu-cmo-aarch64-glibc.tar.gz.sha256
+            out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
