@@ -33,6 +33,7 @@ assert g.index('} // Retained owner protects backing') < g.index('native_crossvi
 assert helper.index('if (!valid(guard, pointer))') < helper.index('if (!budget.consume())') < helper.index('seen.first = *first;')
 assert helper.index('return Result::Mismatch;') < helper.index('*first = 0x89abcdefu;')
 assert 'bytes + 4092' in helper
+assert 'reinterpret_cast<uintptr_t>(pointer) <= UINTPTR_MAX - 4095' in helper
 assert 'atomic_thread_fence' in helper and 'fetch_add' not in helper
 assert '*first' in helper and '*last' in helper
 patch = Path(__file__).with_name('patch_native_cpu_crossview.py').read_text()

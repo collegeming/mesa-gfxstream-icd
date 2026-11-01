@@ -19,6 +19,7 @@ struct Guard {
 };
 inline bool valid(const Guard& g, const void* pointer) {
     return pointer && reinterpret_cast<uintptr_t>(pointer) % alignof(uint32_t) == 0 &&
+        reinterpret_cast<uintptr_t>(pointer) <= UINTPTR_MAX - 4095 &&
         g.size == 4096 && g.offset == 0 && g.rangeSize == 4096 && g.owned &&
         g.epochCurrent && g.mapped && g.physicalCoherentVisible && !g.bound;
 }
