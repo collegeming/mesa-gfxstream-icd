@@ -1,0 +1,68 @@
+name: build-mali-native-kvm-register
+
+on:
+  push:
+    branches: [diagnostic/mali-native-kvm-register]
+    paths:
+      - 'diagnostic/mali_native_kvm_register.c'
+      - 'diagnostic/check_mali_native_kvm.py'
+      - '.github/workflows/build-mali-native-kvm-register.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64-register-only:
+    if: github.ref == 'refs/heads/diagnostic/mali-native-kvm-register'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source boundary assertions (no probe execution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_mali_native_kvm.py diagnostic/mali_native_kvm_register.c | tee out/source-safety.txt
+      - name: Select pinned NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -f "$NDK/source.properties" ]; then
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.2.12479018'
+          fi
+          grep -Eq '^Pkg.Revision *= *27\.2\.12479018$' "$NDK/source.properties"
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
+      - name: Crossbuild native probe without running it
+        shell: bash
+        run: |
+          set -euo pipefail
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          {
+            printf 'repository=%s\ncommit=%s\nref=%s\nrun=%s/%s/actions/runs/%s\nrunAttempt=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseMapCommit=43d4f92d9e54a11129ca4b6313d6c092ced42610\n'
+            cat "$NDK/source.properties"
+            "$CC" --version
+            printf 'target=android-arm64-api33; NDK=r27c (27.2.12479018); binary never executed in CI\n'
+            printf 'boundary=ordinary type8 allocation; one CPU map/unmap; proc maps/smaps; new empty KVM VM; slot0 flags0 GPA0x100000 exact one page; explicit unregister then close; close fallback on unregister failure before Vulkan cleanup\n'
+            printf 'limits=registration success != fault/pfn/coherence proof; no vCPU/guest code/disk/payload access/manual mmap; no existing VM or production integration\n'
+            printf 'compile=-std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -Wl,-z,relro,-z,now -lvulkan\n'
+          } | tee out/build-info.txt
+          "$CC" -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -Wl,-z,relro,-z,now -DPROBE_REVISION=\""$GITHUB_SHA"\" \
+            diagnostic/mali_native_kvm_register.c -o out/mali_native_kvm_register -lvulkan \
+            2>&1 | tee out/compiler.log
+          file out/mali_native_kvm_register | tee out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h -d out/mali_native_kvm_register | tee -a out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --undefined-only out/mali_native_kvm_register | tee out/imported-symbols.txt
+          python3 -I diagnostic/check_mali_native_kvm.py diagnostic/mali_native_kvm_register.c out/imported-symbols.txt | tee out/symbol-safety.txt
+          cp diagnostic/mali_native_kvm_register.c diagnostic/check_mali_native_kvm.py .github/workflows/build-mali-native-kvm-register.yml out/
+          (cd out && sha256sum mali_native_kvm_register mali_native_kvm_register.c check_mali_native_kvm.py build-mali-native-kvm-register.yml build-info.txt binary-info.txt compiler.log imported-symbols.txt source-safety.txt symbol-safety.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mali-native-kvm-register-android-arm64-api33
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
