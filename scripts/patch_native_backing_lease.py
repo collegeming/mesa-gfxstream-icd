@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded native allocation ownership increment. Raw publication remains disabled."""
+"""Native allocation ownership; raw publication requires a paired VMM init contract."""
 import argparse
 from pathlib import Path
 
@@ -50,7 +50,7 @@ edit(manager, '''void ExternalObjectManager::addMapping(uint32_t ctxId, uint64_t
                                         const std::shared_ptr<native::Allocation>& owner,
                                         uint32_t caching) {
     // This internal registry grants no VMM readiness. Decoder publication and
-    // resource Map independently enforce the immutable fail-closed gate.
+    // resource Map independently enforce the negotiated owner-epoch gate.
     if (!owner || !owner->generation()) return false;
     HostMemInfo info{owner->address(), caching, owner, owner->generation()};
     auto key = std::make_pair(ctxId, blobId);
@@ -201,6 +201,21 @@ edit(decoder, '''        if (instanceInfo.debugMessenger != VK_NULL_HANDLE) {'''
             return;
         }
         if (instanceInfo.debugMessenger != VK_NULL_HANDLE) {''')
+# A failed GPU idle is not permission to free native allocations or their parent.
+edit(decoder, '''                    string_VkResult(res), res);
+                return;
+            }
+
+            LOG_CALLS_VERBOSE("%s: %zu semaphores."''', '''                    string_VkResult(res), res);
+                if (deviceInfo.nativeLifetime) {
+                    // Preserve all driver children and allocation/device/instance owners.
+                    // Lost-device recovery has no safe detach/completion proof here.
+                    (void)new InstanceObjects::DeviceObjects(std::move(deviceObjects));
+                }
+                return;
+            }
+
+            LOG_CALLS_VERBOSE("%s: %zu semaphores."''')
 # Remove preexisting explicit destroy-device wait from mMutex (no lease wait).
 edit(decoder, '''        destroyDeviceObjects(deviceObjects);
 
@@ -254,7 +269,7 @@ edit(resource, '''int VirtioGpuResource::Destroy() {
     if''', '''int VirtioGpuResource::Destroy() {
     if (mBlobMemory && std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory)) {
         // Enabled production must require proven detach before this callback.
-        // Readiness is hard false here, so old VMM can never acquire a native lease.
+        // An old VMM cannot acquire a lease; a paired VMM must detach before unref.
         if (mNativeMapState.active()) return -EBUSY;
         mBlobMemory.reset();
     }
@@ -361,4 +376,54 @@ edit(resource_h, '    bool HasActiveNativeMap() const { return mNativeMapState.a
     bool HasNativeBacking() const {
         return mBlobMemory && std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory);
     }''')
+# Serialize resource lookup/use and active-state mutation against reset/restore.
+# Order: resource operations -> lifecycle -> manager. Decoder uses decoder mutex
+# -> lifecycle -> manager and never takes resource operations. No operation lock
+# is held across renderer stop/join/drain or context destruction waits.
+frontend_h = 'host/virtio_gpu_frontend.h'
+edit(frontend_h, '#include <memory>', '#include <memory>\n#include <mutex>')
+edit(frontend_h, '    VirtioGpuFrontend();', '    VirtioGpuFrontend();\n    std::recursive_mutex mResourceOperations;\n    std::atomic<bool> mNativeRetiring{false};')
+frontend = 'host/virtio_gpu_frontend.cpp'
+for method in ['createResource', 'importResource', 'unrefResource', 'attachIov', 'detachIov',
+               'transferReadIov', 'transferWriteIov', 'attachResource', 'detachResource',
+               'getResourceInfo', 'createBlob', 'resourceMap', 'resourceUnmap',
+               'resourceMapInfo', 'exportBlob', 'vulkanInfo', 'processAddressSpaceCommand',
+               'snapshotFrontend', 'restoreFrontend', 'restoreAsg']:
+    path = root / frontend
+    text = path.read_text()
+    start = text.index('VirtioGpuFrontend::' + method + '(')
+    brace = text.index('{', start)
+    guard = '\n    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);'
+    if method in ['createResource', 'createBlob', 'resourceMap']:
+        guard += '\n    if (mNativeRetiring) return -EBUSY;'
+    text = text[:brace + 1] + guard + text[brace + 1:]
+    path.write_text(text)
+edit(frontend, '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    {''', '''int VirtioGpuFrontend::destroyVirtioGpuObjects() {
+    {
+    std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
+    if (native::publicationReady()) mNativeRetiring = true;
+    {''')
+edit(frontend, '''        mResources.clear();
+    }
+    {
+        std::vector<VirtioGpuContextId> contextIds;''', '''        mResources.clear();
+    }
+    } // release resource operation lock before context cleanup/decoder waits
+    {
+        std::vector<VirtioGpuContextId> contextIds;''')
+edit(frontend, '''int VirtioGpuFrontend::snapshot(const char* directory) {
+    for (const auto& [id, resource] : mResources) {
+        if (resource.HasNativeBacking()) return -EBUSY;
+    }''', '''int VirtioGpuFrontend::snapshot(const char* directory) {
+    { std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);
+      for (const auto& [id, resource] : mResources) {
+        if (resource.HasNativeBacking()) return -EBUSY;
+      }
+    }''')
+text = (root / frontend).read_text()
+start = text.index('VirtioGpuFrontend::init(')
+brace = text.index('{', start)
+text = text[:brace + 1] + '\n    mNativeRetiring.store(false);' + text[brace + 1:]
+(root / frontend).write_text(text)
 print('Applied paired native allocation ownership; native mapping requires exact init contract')
