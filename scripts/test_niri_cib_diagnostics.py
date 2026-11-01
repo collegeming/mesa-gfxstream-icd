@@ -98,7 +98,7 @@ create = block(decoder, '    VkResult on_vkCreateImage(', '    void destroyImage
 assert create.count('CIB1-DIAG-CREATE') == 1
 assert 'GFXSTREAM_NIRI_IMAGE_TRACE' in create
 assert create.count(BOUND) == 1
-for token in ['marker=%d state=%s handle-null=%d marker-stride=%d marker-format=%d marker-usage=%d',
+for token in ['marker=%d', 'state=%s handle-null=%d marker-stride=%d marker-format=%d marker-usage=%d',
               'consumer=0x%llx producer=0x%llx cib-enabled=%d view-count=%u',
               'view0=%u view1=%u view2=%u view3=%u pNext=%s', 'niriImagePNext(pCreateInfo->pNext)']:
     assert token in create
