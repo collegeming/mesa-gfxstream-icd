@@ -19,6 +19,7 @@ C_CALLS = VULKAN | {
 # is restricted to three exact uses below; no payload access is permitted.
 NATIVE_IMPORTS = {
     '__libc_start_main', '__cxa_finalize', '__gmon_start__', '__stack_chk_fail',
+    '__stack_chk_guard', 'abort',  # aarch64 stack protector / compiler CRT
     '_ITM_deregisterTMCloneTable', '_ITM_registerTMCloneTable',
     'printf', '__printf_chk', 'putchar', 'puts', 'putc', 'fflush', 'stdout',
     'strcmp', 'strncmp', 'strstr', 'getenv', 'sysconf', 'memcpy', 'memset',
@@ -124,7 +125,7 @@ if len(sys.argv) == 4:
     assert re.search(r'Machine:\s+AArch64', elf)
     assert re.search(r'Class:\s+ELF64', elf)
     assert '/lib/ld-linux-aarch64.so.1' in elf
-    assert set(re.findall(r'\(NEEDED\).*?\[(.*?)\]', elf)) == {'libvulkan.so.1', 'libc.so.6'}
+    assert set(re.findall(r'\(NEEDED\).*?\[(.*?)\]', elf)) == {'libvulkan.so.1', 'libc.so.6', 'ld-linux-aarch64.so.1'}
     print('PASS ELF: native aarch64 glibc, normal libvulkan.so.1 loader linkage')
 else:
     assert len(sys.argv) == 2
