@@ -51,8 +51,9 @@ park = asg[asg.index('AsgOnUnavailableReadStatus AddressSpaceGraphicsContext::on
            asg.index('AddressSpaceDeviceType AddressSpaceGraphicsContext::getDeviceType()')]
 assert park.count('CIB1-DIAG-ASG-PARK') == 1
 assert park.count('CIB1-DIAG-ASG-WAKE') == 1
-for token in ['CIB1-DIAG-ASG-PARK: write=%u read=%u state=%u guest-write=%u host-consumed=%u',
-              'CIB1-DIAG-ASG-WAKE: cmd=%d write=%u read=%u state=%u guest-write=%u host-consumed=%u',
+for token in ['CIB1-DIAG-ASG-PARK: write=%u read=%u state=%u guest-write=%u',
+              'CIB1-DIAG-ASG-WAKE: cmd=%d write=%u read=%u state=%u guest-write=%u',
+              'host-consumed=%u',
               'reinterpret_cast<ring_buffer*>(mRingAllocation.buffer)',
               'reinterpret_cast<asg_ring_config*>(toHost->config)',
               'toHost->write_pos', 'toHost->read_pos', 'toHost->state',
