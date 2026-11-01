@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -19,6 +19,7 @@ on:
       - 'scripts/*native_roundtrip*'
       - 'scripts/*native_cpu_crossview*'
       - 'scripts/*native_cpu_reverse*'
+      - 'scripts/*native_cpu_prefault*'
 
 permissions:
   contents: read
@@ -80,6 +81,10 @@ jobs:
           cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-crossview-before/"
           python3 -I ci/scripts/patch_native_cpu_crossview.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/test_native_cpu_crossview_integration.py "$RUNNER_TEMP/native-crossview-before" "$GITHUB_WORKSPACE/source"
+          mkdir "$RUNNER_TEMP/native-prefault-before"
+          cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-prefault-before/"
+          python3 -I ci/scripts/patch_native_cpu_prefault.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" "$GITHUB_WORKSPACE/source"
           git -C source diff --check
           mkdir out
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
@@ -94,6 +99,7 @@ jobs:
           cp ci/scripts/*native_roundtrip* out/
           cp ci/scripts/*native_cpu_crossview* out/
           cp ci/scripts/*native_cpu_reverse* out/
+          cp ci/scripts/*native_cpu_prefault* out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -211,6 +217,16 @@ jobs:
             ci/scripts/test_native_cpu_reverse.cpp -o "$RUNNER_TEMP/test-native-cpu-reverse"
           "$RUNNER_TEMP/test-native-cpu-reverse"
           python3 -I ci/scripts/test_native_cpu_crossview_integration.py "$RUNNER_TEMP/native-crossview-before" source | tee out/native-cpu-crossview-tests.txt
+
+      - name: Test read-only prefault helper on ordinary CPU arrays
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Ici/scripts \
+            ci/scripts/test_native_cpu_prefault.cpp -o "$RUNNER_TEMP/test-native-cpu-prefault"
+          "$RUNNER_TEMP/test-native-cpu-prefault"
+          python3 -I ci/scripts/test_native_cpu_prefault_integration.py "$RUNNER_TEMP/native-prefault-before" source | tee out/native-cpu-prefault-tests.txt
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -362,6 +378,17 @@ jobs:
                   "payload": "Two request observations then two reply writes at0/4092 intentionally even on request mismatch; direction=reverse request-match logged separately; forward exchange unchanged",
                   "boundary": "Reverse visibility diagnostic only, not a forward handshake/GPU/maintenance-free coherence proof; no additional cache maintenance",
                   "test_sha256": hashlib.sha256(Path('out/test_native_cpu_reverse.cpp').read_bytes()).hexdigest()
+              },
+              "native_cpu_prefault": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NATIVE_CPU_PREFAULT exactly1 and app guest-native-cpu-crossview or guest-native-cpu-reverse; one allocation per app, at most2 reads per process",
+                  "operation": "After native map owner records exact pointer and before publication: one volatile32 read at offset0 then ARM64 dsb sy; no payload stores or extra cache maintenance",
+                  "guard": "Actual physical type8 HOST_VISIBLE|HOST_COHERENT, owned generation/current epoch, mapped pointer identity, allocation4096/page4096/page aligned/address bounds",
+                  "boundary": "Diagnostic preregistration fault hypothesis, not established production requirement or GPU/coherence proof; forward/reverse hooks unchanged",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['native_cpu_prefault.h', 'patch_native_cpu_prefault.py',
+                                          'test_native_cpu_prefault.cpp', 'test_native_cpu_prefault_integration.py',
+                                          'native-cpu-prefault-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
