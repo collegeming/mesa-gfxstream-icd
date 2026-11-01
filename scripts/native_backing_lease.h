@@ -3,6 +3,9 @@
 #include <vulkan/vulkan.h>
 #include <condition_variable>
 #include <cstdint>
+#include <cstddef>
+#include <cstring>
+#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -23,6 +26,7 @@ public:
     }
     // Only after producers/decoder threads have stopped, never under decoder or
     // manager locks. Includes child finalizers enqueued while parents retire.
+    bool idle() { std::lock_guard<std::mutex> lock(mMutex); return mPending == 0; }
     void drain() {
         if (onWorker()) std::terminate(); // self-drain cannot make progress
         std::unique_lock<std::mutex> lock(mMutex);
@@ -71,18 +75,109 @@ private:
     std::function<void()> mDestroy;
 };
 
+inline constexpr uint64_t kLeaseParam = 0x44564d4c;
+inline constexpr uint64_t kDetachMask = 0x0f;
+struct LeaseDescriptor {
+    uint32_t size;
+    uint32_t version;
+    uint64_t offered;
+    uint64_t required;
+    uint64_t hostSupported;
+    uint64_t accepted;
+    uint64_t epoch;
+    uint8_t contractId[16];
+};
+static_assert(sizeof(LeaseDescriptor) == 64, "Native lease ABI size");
+static_assert(offsetof(LeaseDescriptor, size) == 0 && offsetof(LeaseDescriptor, version) == 4 &&
+    offsetof(LeaseDescriptor, offered) == 8 && offsetof(LeaseDescriptor, required) == 16 &&
+    offsetof(LeaseDescriptor, hostSupported) == 24 && offsetof(LeaseDescriptor, accepted) == 32 &&
+    offsetof(LeaseDescriptor, epoch) == 40 && offsetof(LeaseDescriptor, contractId) == 48,
+    "Native lease ABI offsets");
+inline constexpr uint8_t kContractId[16] = {
+    0x44,0x56,0x4d,0x4e,0x4c,0x45,0x41,0x53,0x45,0,0,0,0,0,0,1};
+class Offer {
+public:
+    bool parse(uint64_t key, uint64_t value) {
+        if (key != kLeaseParam) return true;
+        if (mSeen) return false;
+        mSeen = true;
+        if (!value || value % alignof(LeaseDescriptor)) return false;
+        mOutput = reinterpret_cast<LeaseDescriptor*>(static_cast<uintptr_t>(value));
+        if (mOutput->size != sizeof(LeaseDescriptor) || mOutput->version != 1) return false;
+        const auto d = *mOutput; // borrowed only during synchronous init
+        mValid = d.size == sizeof(d) && d.version == 1 &&
+            d.offered == kDetachMask && d.required == kDetachMask &&
+            !d.hostSupported && !d.accepted && !d.epoch &&
+            std::memcmp(d.contractId, kContractId, sizeof(kContractId)) == 0;
+        return mValid;
+    }
+    bool valid() const { return mValid; }
+    void acknowledge(uint64_t epoch) {
+        if (mValid) {
+            mOutput->hostSupported = kDetachMask;
+            mOutput->epoch = epoch;
+            mOutput->accepted = kDetachMask; // last: publish completed acknowledgement
+        }
+    }
+private:
+    bool mSeen = false;
+    bool mValid = false;
+    LeaseDescriptor* mOutput = nullptr; // Offer is stack-local in stream_renderer_init
+};
+class Session {
+public:
+    static Session& get() { static auto* s = new Session; return *s; }
+    std::mutex lifecycle;
+    bool begin() {
+        if (mInitialized || mAllocations.load() || !Reclaimer::get().idle()) return false;
+        mInitialized = true;
+        const auto previous = mEpoch.fetch_add(1);
+        if (previous == UINT64_MAX) std::terminate();
+        return true;
+    }
+    uint64_t epoch() const { return mEpoch.load(); }
+    void commit() { mReady.store(true); }
+    void revoke() { mReady.store(false); }
+    void stopped() { mReady.store(false); mInitialized = false; }
+    bool ready(uint64_t epoch) const { return epoch && mReady.load() && epoch == mEpoch.load(); }
+    void allocated() { mAllocations.fetch_add(1); }
+    void freed() { mAllocations.fetch_sub(1); }
+private:
+    bool mInitialized = false; // lifecycle lock
+    std::atomic<uint64_t> mEpoch{0};
+    std::atomic<uint64_t> mAllocations{0};
+    std::atomic<bool> mReady{false};
+};
+inline bool publicationReady() { return Session::get().ready(Session::get().epoch()); }
+class Initialization {
+public:
+    Initialization() : mLock(Session::get().lifecycle), mStarted(Session::get().begin()) {}
+    ~Initialization() { if (mStarted && !mSuccess) Session::get().stopped(); }
+    bool started() const { return mStarted; }
+    void success(Offer& offer) {
+        if (offer.valid()) { Session::get().commit(); offer.acknowledge(Session::get().epoch()); }
+        mSuccess = true;
+    }
+private:
+    std::unique_lock<std::mutex> mLock;
+    bool mStarted;
+    bool mSuccess = false;
+};
+
 class Allocation {
 public:
     Allocation(std::shared_ptr<Lifetime> deviceLifetime, VkDevice device, VkDeviceMemory memory,
                uint64_t size, uint64_t generation, PFN_vkUnmapMemory unmap, PFN_vkFreeMemory free)
         : mDeviceLifetime(std::move(deviceLifetime)), mDevice(device), mMemory(memory),
-          mSize(size), mGeneration(generation), mUnmap(unmap), mFree(free) {}
+          mSize(size), mGeneration(generation), mUnmap(unmap), mFree(free),
+          mEpoch(Session::get().epoch()) { Session::get().allocated(); }
     Allocation(const Allocation&) = delete;
     Allocation& operator=(const Allocation&) = delete;
     void mapped(void* address) { mAddress = address; }
     void* address() const { return mAddress; }
     uint64_t size() const { return mSize; }
     uint64_t generation() const { return mGeneration; }
+    uint64_t epoch() const { return mEpoch; }
     ~Allocation() {
         const auto device = mDevice;
         const auto memory = mMemory;
@@ -93,6 +188,7 @@ public:
                                unmap, free, mapped] {
             if (mapped) unmap(device, memory);
             free(device, memory, nullptr);
+            Session::get().freed();
         });
     }
 private:
@@ -103,6 +199,7 @@ private:
     uint64_t mGeneration;
     PFN_vkUnmapMemory mUnmap;
     PFN_vkFreeMemory mFree;
+    uint64_t mEpoch;
     void* mAddress = nullptr;
 };
 
@@ -114,10 +211,6 @@ inline bool validExtent(const Allocation& owner, uint64_t requested, uint64_t pa
     const uint64_t rounded = (requested + page - 1) & ~(page - 1);
     return rounded <= owner.size() && rounded <= std::numeric_limits<uintptr_t>::max() - address;
 }
-
-// Not negotiated: existing renderer unmap has no trustworthy unregister proof.
-// No environment variable, callback invocation or CPU test can turn this true.
-inline constexpr bool publicationReady() { return false; }
 
 // Stable virtio blob ABI values: HOST3D=2, MAPPABLE=1, SHAREABLE=2.
 // Guest-handle imports, cross-device and unknown flags are not native backing.

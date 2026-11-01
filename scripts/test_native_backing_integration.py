@@ -27,9 +27,14 @@ assert 'if (info->nativeOwner) info->nativeOwner->mapped(info->ptr);' in d
 frontend = read('host/virtio_gpu_frontend.cpp')
 assert 'if (resource.Destroy() != 0)' in frontend
 assert frontend.index('if (resource.Destroy() != 0)') < frontend.index('mResources.erase(resourceIt);')
-assert 'native::publicationReady() || !memory.owner' in r
+assert '!native::Session::get().ready(memory.owner->epoch())' in r
+assert '!native::Session::get().ready(info->nativeOwner->epoch())' in d
 assert 'getEnvironmentVariable' not in helper
-assert 'inline constexpr bool publicationReady() { return false; }' in helper
+assert 'class Initialization' in helper and 'class Offer' in helper
+renderer = read('host/virtio_gpu_gfxstream_renderer.cpp')
+assert 'if (!nativeOffer.parse(param.key, param.value)) return -EINVAL;' in renderer
+assert renderer.index('const int initRes = sFrontend()->init(') < renderer.index('nativeInitialization.success(nativeOffer)')
+assert 'return sFrontend()->createBlob(ctx_id, res_handle, create_blob, handle);' in renderer
 assert 'const auto destroy = deviceDispatch->vkDestroyDevice;' in d
 assert 'const auto destroy = dispatch->vkDestroyInstance;' in d
 assert '[device, destroy, boxed]' in d and 'debugContext]' in d

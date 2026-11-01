@@ -49,7 +49,7 @@ static void lifetimeCase(bool mapped, bool logicalFreeFirst, unsigned resourceCo
       assert(events == (mapped ? std::vector<int>{1,2,3,4} : std::vector<int>{2,3,4})); }
 }
 int main() {
-    static_assert(!native::publicationReady(), "No paired VMM proof exists");
+    assert(!native::publicationReady()); // old VMM: absent offer stays disabled
     assert(native::nativeBlob(false, 0, 0));
     assert(native::nativeBlob(true, 2, 1)); // deferred native HOST3D
     assert(native::nativeBlob(true, 2, 3));
