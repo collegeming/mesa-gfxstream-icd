@@ -95,6 +95,22 @@ edit(decoder, '        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;'
             native::nativeBlob(createBlobInfoPtr != nullptr,
                 createBlobInfoPtr ? createBlobInfoPtr->blobMem : 0,
                 createBlobInfoPtr ? createBlobInfoPtr->blobFlags : 0);
+        if (hostVisible && !m_vkEmulation->getFeatures().ExternalBlob.enabled()) {
+            static std::atomic<unsigned> nativeAllocationLogs{0};
+            if (nativeAllocationLogs.fetch_add(1, std::memory_order_relaxed) < 16) {
+                GFXSTREAM_INFO("NATIVE-LEASE-ALLOC: eligible=%d ready=%d host-visible=%d virtio-next=%d "
+                    "blob-present=%d blob-mem=%u allocation-blob-flags=0x%x size=%llu "
+                    "alias=%d fd-import=%d ahb-import=%d hostptr-import=%d shared=%d private=%d pool=%d folio=%llu",
+                    nativeAllocation, native::publicationReady(), hostVisible,
+                    m_vkEmulation->getFeatures().VirtioGpuNext.enabled(), createBlobInfoPtr != nullptr,
+                    createBlobInfoPtr ? createBlobInfoPtr->blobMem : 0,
+                    createBlobInfoPtr ? createBlobInfoPtr->blobFlags : 0,
+                    (unsigned long long)memoryInfo.size, importEmulatedExternalMemory,
+                    diagnosticFdInfo != nullptr, diagnosticAhb != nullptr, diagnosticHostPtr != nullptr,
+                    sharedMemory.has_value(), privateMemory != nullptr, poolOffset >= 0,
+                    (unsigned long long)folioCharge.bytes());
+            }
+        }
         if (nativeAllocation) {
             std::lock_guard<std::mutex> nativeLock(native::Session::get().lifecycle);
             auto* nativeDevice = gfxstream::base::find(mDeviceInfo, device);
@@ -144,7 +160,13 @@ edit(decoder, '''            if (!exportedMemoryOpt) {
                 // Memory''')
 edit(decoder, '''        } else if (!info->needUnmap) {
             VkResult mapResult = vk->vkMapMemory''', '''        } else if (!native::publicationReady() || !info->nativeOwner) {
-            GFXSTREAM_ERROR("NATIVE-LEASE-REJECT: VMM detach acknowledgement not negotiated");
+            GFXSTREAM_ERROR("NATIVE-LEASE-PUBLISH-REJECT: ready=%d owner=%d owner-epoch=%llu "
+                "session-epoch=%llu owner-epoch-current=%d size=%llu need-unmap=%d",
+                native::publicationReady(), info->nativeOwner != nullptr,
+                info->nativeOwner ? (unsigned long long)info->nativeOwner->epoch() : 0ULL,
+                (unsigned long long)native::Session::get().epoch(),
+                info->nativeOwner && native::Session::get().ready(info->nativeOwner->epoch()),
+                (unsigned long long)info->size, info->needUnmap);
             return VK_ERROR_FEATURE_NOT_PRESENT;
         } else if (!info->needUnmap) {
             VkResult mapResult = vk->vkMapMemory''')
@@ -241,6 +263,28 @@ edit(decoder, '''        std::lock_guard<std::mutex> lock(mMutex);
         }
         if (!objects.device.empty()) destroyDeviceObjects(objects);''')
 
+# Validate real virtio RESOURCE_CREATE_BLOB flags separately from Vulkan's
+# deferred allocation metadata. Invalid creation cannot acquire a raw lease.
+edit(resource, '''                if (memoryMappingOpt) {
+                    resource.mBlobMemory.emplace''', '''                if (memoryMappingOpt) {
+                    if (!native::nativeResource(createBlobArgs->blob_mem, createBlobArgs->blob_flags)) {
+                        GFXSTREAM_ERROR("NATIVE-LEASE-CREATE-REJECT: blob-mem=%u resource-flags=0x%x requires-mappable-host3d",
+                            createBlobArgs->blob_mem, createBlobArgs->blob_flags);
+                        return std::nullopt;
+                    }
+                    resource.mBlobMemory.emplace''')
+edit(resource, '''        resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
+    }
+
+    return resource;''', '''        if (!native::nativeResource(createBlobArgs->blob_mem, createBlobArgs->blob_flags)) {
+            GFXSTREAM_ERROR("NATIVE-LEASE-CREATE-REJECT: blob-mem=%u resource-flags=0x%x requires-mappable-host3d",
+                createBlobArgs->blob_mem, createBlobArgs->blob_flags);
+            return std::nullopt;
+        }
+        resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
+    }
+
+    return resource;''')
 # Resource holds owner until Destroy, NOT until Unmap. This state machine does
 # not assert VMM detach and cannot enable raw publication.
 edit(resource_h, '    int Map(void** outAddress, uint64_t* outSize);', '    int Map(void** outAddress, uint64_t* outSize);\n    int Unmap();')

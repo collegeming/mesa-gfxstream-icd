@@ -57,7 +57,18 @@ int main() {
     assert(!native::nativeBlob(true, 3, 1)); // HOST3D_GUEST not supported
     assert(!native::nativeBlob(true, 2, 9)); // CREATE_GUEST_HANDLE never native
     assert(!native::nativeBlob(true, 2, 5)); // CROSS_DEVICE not supported
-    assert(!native::nativeBlob(true, 2, 0));
+    assert(native::nativeBlob(true, 2, 0)); // actual zeroed deferred VkCreateBlobGOOGLE
+    assert(native::nativeBlob(true, 2, 2)); // supported allocation metadata shareable bit
+    assert(native::nativeResource(2, 1)); // later RESOURCE_CREATE_BLOB supplies MAPPABLE
+    assert(native::nativeResource(2, 3));
+    assert(!native::nativeResource(2, 0)); // not a mappable resource
+    assert(!native::nativeResource(2, 2));
+    assert(!native::nativeResource(1, 1));
+    assert(!native::nativeResource(3, 1));
+    assert(!native::nativeResource(2, 5));
+    assert(!native::nativeResource(2, 9));
+    assert(!native::nativeBlob(true, 2, 16));
+    assert(!native::nativeResource(2, 17));
     for (bool mapped : {false, true})
         for (bool freeFirst : {false, true})
             for (unsigned count : {0u, 1u, 3u}) lifetimeCase(mapped, freeFirst, count);

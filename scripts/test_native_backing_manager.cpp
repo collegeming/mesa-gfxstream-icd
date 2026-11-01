@@ -1,5 +1,7 @@
 // Links the actual external_object_manager.cpp, not a replica of its registry.
 #include "gfxstream/host/external_object_manager.h"
+#include "vulkan_gfxstream.h"
+#include "gfxstream/virtio-gpu-gfxstream-renderer.h"
 #include <cassert>
 #include <chrono>
 #include <future>
@@ -8,6 +10,23 @@ using namespace gfxstream::host;
 static VKAPI_ATTR void VKAPI_CALL unmap(VkDevice, VkDeviceMemory) {}
 static VKAPI_ATTR void VKAPI_CALL freeMemory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) {}
 int main() {
+    // Replay the paired guest's two distinct real ABI stages. The allocation
+    // chain was memset-zeroed and only HOST3D/id were assigned before encoding.
+    VkCreateBlobGOOGLE allocationBlob{};
+    allocationBlob.blobMem = STREAM_BLOB_MEM_HOST3D;
+    allocationBlob.blobId = 77;
+    assert(allocationBlob.blobFlags == 0);
+    assert(native::nativeBlob(true, allocationBlob.blobMem, allocationBlob.blobFlags));
+    stream_renderer_create_blob resourceBlob{};
+    resourceBlob.blob_mem = STREAM_BLOB_MEM_HOST3D;
+    resourceBlob.blob_flags = STREAM_BLOB_FLAG_USE_MAPPABLE;
+    resourceBlob.blob_id = allocationBlob.blobId;
+    resourceBlob.size = 4096;
+    assert(native::nativeResource(resourceBlob.blob_mem, resourceBlob.blob_flags));
+    resourceBlob.blob_flags = 0;
+    assert(!native::nativeResource(resourceBlob.blob_mem, resourceBlob.blob_flags));
+    resourceBlob.blob_flags = STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE;
+    assert(!native::nativeResource(resourceBlob.blob_mem, resourceBlob.blob_flags));
     ExternalObjectManager manager;
     auto done = std::make_shared<std::promise<void>>();
     auto finished = done->get_future();
