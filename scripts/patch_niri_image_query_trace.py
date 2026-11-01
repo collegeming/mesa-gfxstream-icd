@@ -27,10 +27,12 @@ methods='''    uint64_t niriImageTraceLocked(VkInstance instance) REQUIRES(mMute
     }
     void traceNiriImageQueryInput(VkPhysicalDevice physical, const VkPhysicalDeviceImageFormatInfo2* input) {
         std::lock_guard<std::mutex> lock(mMutex);
+        if (!input) return;
+        const auto* ext = vk_find_struct<VkPhysicalDeviceExternalImageFormatInfo>(input);
+        if (!ext || !ext->handleType) return; // filter BEFORE consuming the shared budget
         const auto* info = gfxstream::base::find(mPhysdevInfo, physical);
         const uint64_t id = info ? niriImageTraceLocked(info->instance) : 0;
-        if (!id || !input) return;
-        const auto* ext = vk_find_struct<VkPhysicalDeviceExternalImageFormatInfo>(input);
+        if (!id) return;
         GFXSTREAM_INFO("NIRI-IMAGE-QUERY-WIRE: id=%llu fmt=%u type=%u tiling=%u usage=0x%x flags=0x%x external=0x%x pNext=%s phase=before-host-codec-transform",
             (unsigned long long)id, input->format, input->type, input->tiling, input->usage, input->flags,
             ext ? ext->handleType : 0, niriImagePNext(input->pNext).c_str());
@@ -54,7 +56,7 @@ edit(d,'''        VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
         VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
         VkFormat format = pImageFormatInfo->format;''')
 edit(d,'''        // Pick by host dispatch-pointer availability; see on_vkGetPhysicalDeviceFeatures2.
-        if (vk->vkGetPhysicalDeviceImageFormatProperties2) {''','''        const uint64_t niriQueryRecord = niriImageTraceLocked(physdevInfo->instance);
+        if (vk->vkGetPhysicalDeviceImageFormatProperties2) {''','''        const uint64_t niriQueryRecord = niriOriginalHandle ? niriImageTraceLocked(physdevInfo->instance) : 0;
         if (niriQueryRecord) GFXSTREAM_INFO(
             "NIRI-IMAGE-QUERY-BEGIN: id=%llu phys=%p fmt=%u type=%u tiling=%u usage=0x%x flags=0x%x external=0x%x pNext=%s "
             "native-fmt=%u native-tiling=%u native-usage=0x%x native-flags=0x%x native-external=0x%x native-pNext=%s",
@@ -86,8 +88,8 @@ edit(d,'''        if (res != VK_SUCCESS) {
         }
 
         VkExternalImageFormatProperties* extImageFormatProps =''')
-edit(d,'''            createRes = vk->vkCreateImage(device, pCreateInfo, nullptr, pImage);''','''            const uint64_t niriCreateRecord = niriDeviceImageTraceLocked(device);
-            const auto* niriExternal = vk_find_struct<VkExternalMemoryImageCreateInfo>(pCreateInfo);
+edit(d,'''            createRes = vk->vkCreateImage(device, pCreateInfo, nullptr, pImage);''','''            const auto* niriExternal = vk_find_struct<VkExternalMemoryImageCreateInfo>(pCreateInfo);
+            const uint64_t niriCreateRecord = niriExternal && niriExternal->handleTypes ? niriDeviceImageTraceLocked(device) : 0;
             if (niriCreateRecord) GFXSTREAM_INFO(
                 "NIRI-IMAGE-CREATE-BEGIN: id=%llu device=%p fmt=%u type=%u extent=%ux%ux%u tiling=%u usage=0x%x flags=0x%x external=0x%x pNext=%s",
                 (unsigned long long)niriCreateRecord, (void*)device, pCreateInfo->format, pCreateInfo->imageType,
@@ -98,9 +100,9 @@ edit(d,'''            createRes = vk->vkCreateImage(device, pCreateInfo, nullptr
             if (niriCreateRecord) GFXSTREAM_INFO("NIRI-IMAGE-CREATE-END: id=%llu result=%d image=%p",
                 (unsigned long long)niriCreateRecord, (int)createRes, createRes == VK_SUCCESS ? (void*)*pImage : nullptr);''')
 # Requirements are logged before existing size/index transformations, after real driver call.
-req='''        const uint64_t niriReqRecord = niriDeviceImageTraceLocked(device);
+req='''        const auto* niriImage = gfxstream::base::find(mImageInfo, NIRI_IMAGE);
+        const uint64_t niriReqRecord = niriImage && niriImage->diagnosticExternalHandleTypes ? niriDeviceImageTraceLocked(device) : 0;
         if (niriReqRecord) {
-            const auto* niriImage = gfxstream::base::find(mImageInfo, NIRI_IMAGE);
             GFXSTREAM_INFO("NIRI-IMAGE-REQUIREMENTS: id=%llu device=%p image=%p fmt=%u size=%llu alignment=%llu bits=0x%x native-output=1",
                 (unsigned long long)niriReqRecord, (void*)device, (void*)NIRI_IMAGE,
                 niriImage ? niriImage->imageCreateInfoShallow.format : VK_FORMAT_UNDEFINED,
