@@ -60,16 +60,22 @@ using Transfer = VkResult (*)(void*, uint64_t, Range);
 using Complete = VkResult (*)(void*, uint64_t, Range, Completion*);
 struct Callbacks {
     void* context = nullptr;
-    // Must include copy + host flush, and copy + host invalidate respectively.
+    // Upload: staging copy -> flush actual GPU backing -> permit submission.
+    // Download: proven GPU completion -> invalidate actual GPU backing -> copy
+    // into staging -> return success -> permit guest publication/readability.
+    // Never copy to guest-visible bytes before invalidating the GPU backing.
     // A backend without these operations must leave callbacks null / return error.
     Transfer uploadAndFlush = nullptr;
     Transfer submitGpu = nullptr;
     Complete completion = nullptr;
     Transfer downloadAndInvalidate = nullptr;
 };
-// Coverage is an attestation by the future paired implementation, not an env flag.
+// Coverage bits are self-attestation by a future paired implementation, NOT
+// runtime proof that interception is complete, and cannot be enabled by env.
+// Production currently supplies no attestation/callbacks and rejects opt-in use.
 // Every guest write, submission, fence poll/wait, queue/device idle, guest read/map,
-// and destruction must be intercepted. A single fence callback is insufficient.
+// cross-queue/timeline/local-sync-fd wait, persistent CPU read and destruction must
+// be intercepted/proven. A single fence callback is insufficient.
 enum Coverage : uint32_t {
     GuestWrites = 1, Submissions = 2, FencePollAndWait = 4, QueueIdle = 8,
     DeviceIdle = 16, GuestReadsAndMaps = 32, Destruction = 64,
