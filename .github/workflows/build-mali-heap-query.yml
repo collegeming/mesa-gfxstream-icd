@@ -2,6 +2,11 @@ name: build-mali-heap-query
 
 on:
   workflow_dispatch:
+  push:
+    branches: [diagnostic/mali-heap-query]
+    paths:
+      - 'diagnostic/mali_heap_query.c'
+      - '.github/workflows/build-mali-heap-query.yml'
 
 permissions:
   contents: read
