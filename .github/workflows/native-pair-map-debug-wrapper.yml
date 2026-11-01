@@ -1,0 +1,46 @@
+name: native-pair-map-debug-wrapper-cpu
+on:
+  push:
+    branches: [diagnostic/native-pair-map-debug]
+    paths:
+      - scripts/native_pair_map_debug_exec.sh
+      - tests/test_native_pair_map_debug_exec.py
+      - .github/workflows/native-pair-map-debug-wrapper.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu-shell-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and shellcheck (no Android execution)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          {
+            dash -n scripts/native_pair_exec.sh
+            dash -n scripts/native_pair_map_debug_exec.sh
+            shellcheck --shell=sh scripts/native_pair_exec.sh scripts/native_pair_map_debug_exec.sh
+            shellcheck --version
+          } 2>&1 | tee out/shell-check.log
+      - name: CPU fake executable contract tests
+        run: |
+          set -euo pipefail
+          python3 -I tests/test_native_pair_exec.py 2>&1 | tee out/stable-cpu-tests.log
+          python3 -I tests/test_native_pair_map_debug_exec.py 2>&1 | tee out/cpu-tests.log
+      - name: Package reviewed source and hashes
+        if: always()
+        run: |
+          mkdir -p out
+          cp scripts/native_pair_exec.sh scripts/native_pair_map_debug_exec.sh tests/test_native_pair_exec.py tests/test_native_pair_map_debug_exec.py out/
+          cp .github/workflows/native-pair-map-debug-wrapper.yml out/
+          printf '%s\n' "$GITHUB_SHA" > out/commit.txt
+          sha256sum scripts/native_pair_exec.sh scripts/native_pair_map_debug_exec.sh tests/test_native_pair_exec.py tests/test_native_pair_map_debug_exec.py .github/workflows/native-pair-map-debug-wrapper.yml > out/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-pair-map-debug-wrapper-cpu-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
