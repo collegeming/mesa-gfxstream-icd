@@ -105,13 +105,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer             -Ivulkan-headers/include -Ici/scripts             ci/scripts/test_staging_contract.cpp -o "$RUNNER_TEMP/test-staging-contract"
           "$RUNNER_TEMP/test-staging-contract" | tee out/staging-contract-tests.txt
           "$RUNNER_TEMP/test-staging-contract" --destroy-inflight
-          printf 'PASS: in-flight C++ destruction rejected by lifetime invariant
-' | tee -a out/staging-contract-tests.txt
+          printf 'PASS: in-flight C++ destruction rejected by lifetime invariant\n' | tee -a out/staging-contract-tests.txt
           python3 -I - <<'PY_CHECK' | tee -a out/staging-contract-tests.txt
           from pathlib import Path
           decoder = Path('source/host/vulkan/vk_decoder_global_state.cpp').read_text()
-          helper = Path('ci/scripts/staging_contract.h').read_text().replace('#pragma once
-', '')
+          helper = Path('ci/scripts/staging_contract.h').read_text().replace('#pragma once\n', '')
           assert helper in decoder
           start = decoder.index('    VkResult on_vkAllocateMemory(')
           end = decoder.index('        VkResult result = vk->vkAllocateMemory(', start)
@@ -134,8 +132,7 @@ jobs:
           mkdir "$RUNNER_TEMP/droidvm-ndk-download" "$RUNNER_TEMP/droidvm-ndk-extract"
           curl --fail --location --retry 3 -o "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" \
             https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
-          printf '%s  %s
-' '090e8083a715fdb1a3e402d0763c388abb03fb4e' "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | sha1sum -c -
+          printf '%s  %s\n' '090e8083a715fdb1a3e402d0763c388abb03fb4e' "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | sha1sum -c -
           sha256sum "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" | cut -d ' ' -f 1 > out/ndk-archive.sha256
           unzip -q "$RUNNER_TEMP/droidvm-ndk-download/ndk.zip" -d "$RUNNER_TEMP/droidvm-ndk-extract"
           printf 'ANDROID_NDK_HOME=%s/droidvm-ndk-extract/android-ndk-r27c\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
