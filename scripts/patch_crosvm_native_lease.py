@@ -78,6 +78,9 @@ def main():
     s = replace(s, '        Ok(Box::new(Gfxstream {', '''        let native_lease_epoch = if native_lease_offer {
             native_contract.accepted_epoch()
         } else { None };
+        log::info!("DVML native lease init: offered={} accepted={:#x} host_supported={:#x} epoch={} ready={}",
+            native_lease_offer, native_contract.accepted, native_contract.host_supported,
+            native_contract.epoch, native_lease_epoch.is_some());
         Ok(Box::new(Gfxstream {
             native_lease_epoch,''')
     s = replace(s, 'impl RutabagaComponent for Gfxstream {', '''impl RutabagaComponent for Gfxstream {
@@ -132,7 +135,8 @@ def main():
     let native_lease_offer = matches!(cfg.hypervisor,
         Some(crate::crosvm::config::HypervisorKind::Kvm { .. }))
         && !is_sandboxed && !gpu_params.fixed_blob_mapping && !gpu_params.udmabuf
-        && !gpu_params.external_blob && render_server_fd.is_none() && !has_vfio_gfx_device
+        && !gpu_params.external_blob && render_server_fd.is_none()
+        && !gpu_params.allow_implicit_render_server_exec && !has_vfio_gfx_device
         && cfg.vfio.is_empty() && cfg.coiommu_param.is_none()
         && cfg.protection_type == hypervisor::ProtectionType::Unprotected
         && gpu_params.mode == devices::virtio::GpuMode::ModeGfxstream;
@@ -153,9 +157,17 @@ def main():
             if self.fixed_blob_mapping {''', '''        if source.is_none() {
             let mapper_supported = self.mapper.lock().as_ref()
                 .is_some_and(|mapper| mapper.native_detach_supported());
-            if !rutabaga_gfx::native_lease::raw_mapping_allowed(
-                self.rutabaga.native_lease_epoch(), mapper_supported)
-                || !self.rutabaga.native_host3d_resource(resource_id) {
+            let epoch = self.rutabaga.native_lease_epoch();
+            let host3d = self.rutabaga.native_host3d_resource(resource_id);
+            if !rutabaga_gfx::native_lease::raw_mapping_allowed(epoch, mapper_supported) || !host3d {
+                let reason = if epoch.is_none() { "no-host-ack" }
+                    else if !mapper_supported { "mapper-unsupported" }
+                    else { "non-HOST3D" };
+                static REJECTION_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !REJECTION_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    base::warn!("DVML raw mapping rejected: reason={} res={} epoch={:?} mapper={} host3d={}",
+                        reason, resource_id, epoch, mapper_supported, host3d);
+                }
                 return Err(ErrUnspec);
             }
             if self.fixed_blob_mapping {''')

@@ -36,6 +36,8 @@ assert remove.index('unregister_memory(id)') < remove.index('self.mappings.remov
 assert 'ApiClientError::RequestFailed' in remove
 assert map_blob.index('raw_mapping_allowed(') < map_blob.index('self.rutabaga.map(resource_id)')
 assert 'native_host3d_resource(resource_id)' in map_blob
+assert 'no-host-ack' in map_blob and 'mapper-unsupported' in map_blob and 'non-HOST3D' in map_blob
+assert '!gpu_params.allow_implicit_render_server_exec' in (a.source / 'src/crosvm/sys/linux/gpu.rs').read_text()
 assert 'mapper.native_detach_supported()' in map_blob
 main_gpu = (a.source / 'src/crosvm/sys/linux/gpu.rs').read_text()
 assert main_gpu.index('let native_lease_offer =') < main_gpu.index('dev.set_native_lease_offer(native_lease_offer)')
