@@ -1,0 +1,53 @@
+name: mali-dmabuf-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/mali-dmabuf-probe]
+    paths:
+      - 'diagnostic/mali_dmabuf_probe.c'
+      - '.github/workflows/mali-dmabuf-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select installed NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          test -f "$NDK/source.properties"
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
+      - name: Compile Android arm64 probe with real NDK Vulkan headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir out
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          {
+            printf 'commit=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            cat "$NDK/source.properties"
+            "$CC" --version
+            printf 'target=aarch64-linux-android33; no execution performed by CI\n'
+          } | tee out/build-info.txt
+          "$CC" -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" \
+            diagnostic/mali_dmabuf_probe.c -o out/mali_dmabuf_probe -lvulkan -landroid \
+            2>&1 | tee out/compiler.log
+          cp diagnostic/mali_dmabuf_probe.c out/
+          file out/mali_dmabuf_probe | tee out/binary-info.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h -d out/mali_dmabuf_probe | tee -a out/binary-info.txt
+          (cd out && sha256sum mali_dmabuf_probe mali_dmabuf_probe.c build-info.txt binary-info.txt compiler.log > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mali-dmabuf-probe-android-arm64-api33
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
