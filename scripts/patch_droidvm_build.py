@@ -178,4 +178,20 @@ edit(
 #endif""",
 )
 
+# 9. Android's realtime functions are in bionic; there is no separate librt.
+edit(
+    "common/base/CMakeLists.txt",
+    """elseif(LINUX)
+    set(gfxstream_common_base_platform_deps
+        dl
+        rt)""",
+    """elseif(ANDROID)
+    set(gfxstream_common_base_platform_deps
+        dl)
+elseif(LINUX)
+    set(gfxstream_common_base_platform_deps
+        dl
+        rt)""",
+)
+
 print("done")
