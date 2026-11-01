@@ -1,0 +1,71 @@
+name: build-mali-native-kvm-cpu-read
+
+on:
+  push:
+    branches: [diagnostic/mali-native-kvm-cpu-read]
+    paths:
+      - 'diagnostic/mali_native_kvm_cpu_read.c'
+      - 'diagnostic/check_mali_native_kvm_cpu_read.py'
+      - '.github/workflows/build-mali-native-kvm-cpu-read.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64-offline:
+    if: github.ref == 'refs/heads/diagnostic/mali-native-kvm-cpu-read'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static safety checks only (no KVM execution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_mali_native_kvm_cpu_read.py diagnostic/mali_native_kvm_cpu_read.c | tee out/source-safety.txt
+      - name: Select pinned NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -f "$NDK/source.properties" ]; then
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.2.12479018'
+          fi
+          grep -Eq '^Pkg.Revision *= *27\.2\.12479018$' "$NDK/source.properties"
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          printf 'NDK=%s\n' "$NDK" >> "$GITHUB_ENV"
+      - name: Crosscompile Android binary NEVER run it
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLS="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CC="$TOOLS/aarch64-linux-android33-clang"
+          {
+            printf 'repository=%s\ncommit=%s\nref=%s\nrun=%s/%s/actions/runs/%s\nrunAttempt=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseRegisterCommit=74842e1171d3a088f21bfd3082d374ee99fc3059\n'
+            cat "$NDK/source.properties"
+            "$CC" --version
+            printf 'target=android-arm64-api33; NDK=r27c (27.2.12479018); Android binary NEVER executed in CI\n'
+            printf 'boundary=explicit CLI; anonymous control gates native initialization; each fresh ARM64 VM has readonly code/data pages; only one KVM_RUN, one guest LDR and MMIO signature write; native host payload never touched\n'
+            printf 'watchdog=1s CLOCK_MONOTONIC cond wait, byte immediate_exit and pthread_kill(main,SIGUSR1); no retry; kernel/host hang remains possible; external supervisor cannot guarantee recovery\n'
+            printf 'cleanup=RUN returned and watchdog joined; unregister slots then unmap run then close vcpu/vm/kvm before backing release; unregister failure still closes all refs\n'
+            printf 'limits=MMU off, not Normal-NC, no GPU/coherence/backing-identity claim; native initial value unknown; no actual KVM/device test in CI\n'
+            printf 'compile=-std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -Wl,-z,relro,-z,now -pthread -lvulkan\n'
+          } | tee out/build-info.txt
+          "$CC" -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -Wl,-z,relro,-z,now -DPROBE_REVISION=\""$GITHUB_SHA"\" \
+            diagnostic/mali_native_kvm_cpu_read.c -o out/mali_native_kvm_cpu_read -pthread -lvulkan \
+            2>&1 | tee out/compiler.log
+          file out/mali_native_kvm_cpu_read | tee out/binary-info.txt
+          "$TOOLS/llvm-readelf" -h -d out/mali_native_kvm_cpu_read | tee -a out/binary-info.txt
+          "$TOOLS/llvm-nm" --undefined-only out/mali_native_kvm_cpu_read | tee out/imported-symbols.txt
+          python3 -I diagnostic/check_mali_native_kvm_cpu_read.py diagnostic/mali_native_kvm_cpu_read.c out/imported-symbols.txt "$TOOLS" out | tee out/offline-checks.txt
+          cp diagnostic/mali_native_kvm_cpu_read.c diagnostic/check_mali_native_kvm_cpu_read.py .github/workflows/build-mali-native-kvm-cpu-read.yml out/
+          find out -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum | sed 's|  out/|  |' > out/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mali-native-kvm-cpu-read-android-arm64-api33
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
