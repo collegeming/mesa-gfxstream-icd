@@ -144,7 +144,10 @@ jobs:
                   "Append GFXSTREAM_RENDERER_FEATURES after launcher renderer features",
                   "Select existing Linux udmabuf creator on Android/Linux instead of stub",
                   "Create sealable memfds and apply SHRINK|GROW seals only to shared-memory backing",
-                  "Log RingBlob and Android fillExportHandle type/handle/errno without changing AHB export semantics"
+                  "Log RingBlob and Android fillExportHandle type/handle/errno without changing AHB export semantics",
+                  "Alias importer selects AHB/DMA_BUF/OPAQUE_FD by actual stream type, rejects SHM, and cleans up failed fd imports",
+                  "Force dedicated image allocations for AndroidAHB ColorBuffer backing and AHB alias images",
+                  "Log image transform external types, decoder allocation provenance, and image/memory state before driver bind calls"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
