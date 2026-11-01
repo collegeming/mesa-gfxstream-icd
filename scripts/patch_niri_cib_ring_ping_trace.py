@@ -59,8 +59,8 @@ edit(asg, '''#include <atomic>
 edit(asg, '''        asgNotifyCount().fetch_add(1, std::memory_order_relaxed);
         mConsumerMessages.trySend(ConsumerCommand::Wakeup);
         info->metadata = 0;''', '''        asgNotifyCount().fetch_add(1, std::memory_order_relaxed);
-        const bool cibSent = mConsumerMessages.trySend(ConsumerCommand::Wakeup);
         {
+            const bool cibSent = mConsumerMessages.trySend(ConsumerCommand::Wakeup);
             const char* trace = std::getenv("GFXSTREAM_NIRI_IMAGE_TRACE");
             if (trace && std::strcmp(trace, "1") == 0) {
                 static std::atomic<uint32_t> notifyDiagnostics{0};
