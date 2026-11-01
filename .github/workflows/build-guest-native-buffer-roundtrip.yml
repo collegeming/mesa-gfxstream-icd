@@ -1,0 +1,99 @@
+name: build-guest-native-buffer-roundtrip
+
+on:
+  push:
+    branches: [diagnostic/guest-native-buffer-roundtrip]
+    paths:
+      - 'diagnostic/guest_native_buffer_roundtrip.c'
+      - 'diagnostic/test_guest_native_buffer_roundtrip.c'
+      - 'diagnostic/check_guest_native_buffer_roundtrip.py'
+      - '.github/workflows/build-guest-native-buffer-roundtrip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests-and-guest-compile-only:
+    if: github.ref == 'refs/heads/diagnostic/guest-native-buffer-roundtrip'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and sanitizer dependencies
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils file libvulkan-dev python3
+      - name: Structural gates and actual production helpers on ordinary arrays only
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_guest_native_buffer_roundtrip.py diagnostic/guest_native_buffer_roundtrip.c | tee out/source-safety.txt
+          gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            diagnostic/test_guest_native_buffer_roundtrip.c -o out/cpu-helper-test
+          nm -u out/cpu-helper-test | tee out/cpu-helper-imports.txt
+          if grep -Eq '\bvk[A-Z]|libvulkan' out/cpu-helper-imports.txt; then exit 1; fi
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ./out/cpu-helper-test | tee out/cpu-helper-tests.txt
+          python3 -I - <<'PY' | tee out/cpu-oracle-summary.txt
+          import pathlib
+          text = pathlib.Path('out/cpu-helper-tests.txt').read_text()
+          assert text.count('stage=compare FAIL') == 65
+          assert text.count('stage=compare PASS') == 1
+          assert 'CPU_TEST PASS production helpers' in text
+          print('PASS no-op copy rejected; 64 individual corruptions rejected; expected64word pattern passes; tails and invalid-input canaries intact')
+          PY
+      - name: Compile AArch64 glibc guest binary and inspect ELF only NEVER execute
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" diagnostic/guest_native_buffer_roundtrip.c \
+            -o out/guest_native_buffer_roundtrip -lvulkan 2>&1 | tee out/compiler.log
+          file out/guest_native_buffer_roundtrip | tee out/binary-info.txt
+          readelf -h -l -d -V -n out/guest_native_buffer_roundtrip | tee out/elf-info.txt
+          nm -u out/guest_native_buffer_roundtrip | tee out/undefined-symbols.txt
+          python3 -I diagnostic/check_guest_native_buffer_roundtrip.py diagnostic/guest_native_buffer_roundtrip.c \
+            out/undefined-symbols.txt out/elf-info.txt | tee out/symbol-safety.txt
+      - name: Package reviewed source workflow tests provenance and hashes
+        run: |
+          set -euo pipefail
+          {
+            printf 'probe=guest-native-buffer-roundtrip-v1\nrepository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'run=%s/%s/actions/runs/%s\nattempt=%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseCommit=22ac42cb9e28e77068658a81c418245aaef1571e\nrunner=ubuntu-24.04-arm\n'
+            uname -a
+            gcc --version
+            ldd --version
+            dpkg-query -W libc6 libvulkan-dev libvulkan1
+            printf 'guestCompile=gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now -DPROBE_REVISION=commit -lvulkan\n'
+            printf 'execution=guest binary NEVER executed; actual production payload helpers ASan/UBSan ordinary arrays only, NO Vulkan headers or linkage in CPU helper test\n'
+            printf 'boundary=two4096 buffers TRANSFER_SRC|DST; real requirements intersect type8 HOST_VISIBLE|HOST_COHERENT no substitute; two ordinary requirement-sized allocations<=65536; bind0 map4096; source64 pattern words destination64 complemented words; onecopy256; onequeue onecommandbuffer onesubmit onefencewait1000000000ns\n'
+            printf 'failure=non-success submit/fence or device-lost quarantines process via pause forever retaining resources; no exit/no Vulkan cleanup; parent MUST stop VM externally, NOT kill probe first; no automatic retry\n'
+            printf 'limits=fence timeout NOT kernel/host hang bound; actual backing/blob extent may differ; names/environment NOT loaded-library proof; successful transfer NOT general renderer or shader acceptance\n'
+            printf 'review=separate parent GPU authorization and source safety review mandatory; flag NOT consent; prior CPU approval NOT GPU consent; no host/VM modifications in this build\n'
+            printf 'selection=VK_DRIVER_FILES=/opt/droidvm-mesa-reference/icd.json; LD_LIBRARY_PATH first entry=/opt/droidvm-mesa-reference/usr/local/lib/aarch64-linux-gnu; legacy ICD/layers/preload rejected\n'
+          } | tee out/build-provenance.txt
+          cp diagnostic/guest_native_buffer_roundtrip.c diagnostic/test_guest_native_buffer_roundtrip.c \
+            diagnostic/check_guest_native_buffer_roundtrip.py .github/workflows/build-guest-native-buffer-roundtrip.yml out/
+          rm out/cpu-helper-test
+          (cd out && sha256sum guest_native_buffer_roundtrip guest_native_buffer_roundtrip.c test_guest_native_buffer_roundtrip.c \
+            check_guest_native_buffer_roundtrip.py build-guest-native-buffer-roundtrip.yml compiler.log binary-info.txt elf-info.txt \
+            undefined-symbols.txt source-safety.txt symbol-safety.txt cpu-helper-imports.txt cpu-helper-tests.txt \
+            cpu-oracle-summary.txt build-provenance.txt > SHA256SUMS)
+          tar -czf guest-native-buffer-roundtrip-aarch64-glibc.tar.gz -C out .
+          sha256sum guest-native-buffer-roundtrip-aarch64-glibc.tar.gz | tee guest-native-buffer-roundtrip-aarch64-glibc.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-native-buffer-roundtrip-aarch64-glibc
+          path: |
+            guest-native-buffer-roundtrip-aarch64-glibc.tar.gz
+            guest-native-buffer-roundtrip-aarch64-glibc.tar.gz.sha256
+            out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
