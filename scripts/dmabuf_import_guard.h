@@ -9,14 +9,18 @@ template <typename CloseFd, typename ReleasePool>
 VkResult validateHostVisibleDmaBufImport(
     bool emulateHostVisible, VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType,
     int& fd, uint32_t memoryTypeIndex, PFN_vkGetMemoryFdPropertiesKHR query,
-    uint32_t* reportedBits, CloseFd closeFd, ReleasePool releasePool) {
+    uint32_t* reportedBits, CloseFd closeFd, ReleasePool releasePool,
+    VkResult* reportedQueryResult = nullptr) {
     *reportedBits = 0;
+    if (reportedQueryResult) *reportedQueryResult = VK_ERROR_EXTENSION_NOT_PRESENT;
     if (!emulateHostVisible || handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
         return VK_SUCCESS;
     }
     VkMemoryFdPropertiesKHR props = {VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR, nullptr, 0};
-    const bool compatible = fd >= 0 && query &&
-        query(device, handleType, fd, &props) == VK_SUCCESS && memoryTypeIndex < 32 &&
+    const VkResult queryResult = fd >= 0 && query
+        ? query(device, handleType, fd, &props) : VK_ERROR_EXTENSION_NOT_PRESENT;
+    if (reportedQueryResult) *reportedQueryResult = queryResult;
+    const bool compatible = queryResult == VK_SUCCESS && memoryTypeIndex < 32 &&
         (props.memoryTypeBits & (uint32_t{1} << memoryTypeIndex));
     *reportedBits = props.memoryTypeBits;
     if (compatible) return VK_SUCCESS;

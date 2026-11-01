@@ -78,6 +78,22 @@ jobs:
             -Ivulkan-headers/include -Ici/scripts \
             ci/scripts/test_dmabuf_import_guard.cpp -o "$RUNNER_TEMP/test-dmabuf-import-guard"
           "$RUNNER_TEMP/test-dmabuf-import-guard" | tee out/dmabuf-guard-tests.txt
+          python3 -I - <<'PY' | tee -a out/dmabuf-guard-tests.txt
+          from pathlib import Path
+          decoder = Path('source/host/vulkan/vk_decoder_global_state.cpp').read_text()
+          internal = Path('source/host/vulkan/vk_common_operations.cpp').read_text()
+          extensions = decoder[decoder.index('    std::vector<const char*> filteredDeviceExtensionNames('):]
+          extensions = extensions[:extensions.index('    std::vector<const char*> filteredInstanceExtensionNames(')]
+          assert 'hostAlwaysDeviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);' in extensions
+          assert 'if (hasDeviceExtension(properties, extName))' in extensions
+          assert extensions.index('VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME') < extensions.index('if (hasDeviceExtension(properties, extName))')
+          start = internal.index('    if (emulation->mDeviceInfo.supportsDmaBuf) {')
+          internal_gate = internal[start:internal.index('#endif', start)]
+          assert 'vk_util::extensionSupported(emulation->mDeviceInfo.extensions,' in internal_gate
+          assert 'VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME))' in internal_gate
+          assert 'selectedDeviceExtensionNames.emplace(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);' in internal_gate
+          print('PASS: both DMA_BUF device lists request KHR_external_memory_fd through supported-extension gates')
+          PY
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -161,7 +177,8 @@ jobs:
                   "Force dedicated image allocations for AndroidAHB ColorBuffer backing and AHB alias images",
                   "Log image transform external types, decoder allocation provenance, and image/memory state before driver bind calls",
                   "Reject zero-size non-AHB allocations before driver calls and zero-size non-AHB memory binds to AHB images in both bind entry points",
-                  "Validate actual host-visible DMA_BUF fd memoryTypeBits; reject incompatible index without changing coherency; close rejected fd and release pool reservation"
+                  "Validate actual host-visible DMA_BUF fd memoryTypeBits; reject incompatible index without changing coherency; close rejected fd and release pool reservation",
+                  "Enable supported KHR_external_memory_fd alongside DMA_BUF on decoder and internal devices; bounded device/dispatch and successful-query diagnostics"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",

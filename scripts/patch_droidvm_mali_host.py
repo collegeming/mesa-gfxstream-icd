@@ -683,10 +683,20 @@ edit(
                     poolSize = 0;
                 }
             };
+            VkResult fdQueryResult = VK_ERROR_EXTENSION_NOT_PRESENT;
             VkResult validation = validateHostVisibleDmaBufImport(
                 emulateHostVisible, device, importFdInfo.handleType, importFdInfo.fd,
                 localAllocInfo.memoryTypeIndex, vk->vkGetMemoryFdPropertiesKHR,
-                &fdMemoryTypeBits, [](int ownedFd) { close(ownedFd); }, releaseRejectedPool);
+                &fdMemoryTypeBits, [](int ownedFd) { close(ownedFd); }, releaseRejectedPool,
+                &fdQueryResult);
+            if (fdQueryResult == VK_SUCCESS) {
+                static std::atomic<unsigned> queryLogs{0};
+                if (queryLogs.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    GFXSTREAM_INFO("DMABUF-FD-PROPS: fd=%d index=%u bits=0x%x compatible=%d",
+                                   rejectedFd, localAllocInfo.memoryTypeIndex, fdMemoryTypeBits,
+                                   validation == VK_SUCCESS);
+                }
+            }
             if (validation != VK_SUCCESS) {
                 GFXSTREAM_ERROR(
                     "DMABUF-INDEX-REJECT: fd=%d index=%u fdBits=0x%x queryAvailable=%d "
@@ -700,6 +710,58 @@ edit(
         }
 #endif
         VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
+)
+
+# DMA_BUF fd properties are device commands from KHR_external_memory_fd.
+# Keep decoder supported-extension filtering and internal-device support checks.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "            hostAlwaysDeviceExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);",
+    '''            hostAlwaysDeviceExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+            hostAlwaysDeviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);''',
+)
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    "        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);",
+    '''        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+        if (vk_util::extensionSupported(emulation->mDeviceInfo.extensions,
+                                        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)) {
+            selectedDeviceExtensionNames.emplace(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+        }''',
+)
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    "#include <algorithm>",
+    "#include <algorithm>\n#include <atomic>",
+)
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    "    fillMissingDispatchAliases(emulation->mDvk);",
+    '''    fillMissingDispatchAliases(emulation->mDvk);
+    static std::atomic<unsigned> internalFdDeviceLogs{0};
+    if (internalFdDeviceLogs.fetch_add(1, std::memory_order_relaxed) < 8) {
+        GFXSTREAM_INFO("FD-DEVICE-INTERNAL: enabledDMA=%d enabledKHRfd=%d fdPropertiesFn=%d",
+            selectedDeviceExtensionNames.count(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) != 0,
+            selectedDeviceExtensionNames.count(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) != 0,
+            emulation->mDvk->vkGetMemoryFdPropertiesKHR != nullptr);
+    }''',
+)
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    "        fillMissingDispatchAliases(dispatch);",
+    '''        fillMissingDispatchAliases(dispatch);
+        static std::atomic<unsigned> decoderFdDeviceLogs{0};
+        if (decoderFdDeviceLogs.fetch_add(1, std::memory_order_relaxed) < 8) {
+            bool enabledDma = false;
+            bool enabledFd = false;
+            for (uint32_t i = 0; i < createInfoFiltered.enabledExtensionCount; ++i) {
+                const char* name = createInfoFiltered.ppEnabledExtensionNames[i];
+                enabledDma |= strcmp(name, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) == 0;
+                enabledFd |= strcmp(name, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) == 0;
+            }
+            GFXSTREAM_INFO("FD-DEVICE-DECODER: enabledDMA=%d enabledKHRfd=%d fdPropertiesFn=%d",
+                           enabledDma, enabledFd, dispatch->vkGetMemoryFdPropertiesKHR != nullptr);
+        }''',
 )
 
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.
