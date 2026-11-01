@@ -12,6 +12,9 @@ on:
       - 'scripts/test_dmabuf_import_guard.cpp'
       - 'scripts/staging_contract.h'
       - 'scripts/test_staging_contract.cpp'
+      - 'scripts/host_memory_contract.h'
+      - 'scripts/test_host_memory_contract.cpp'
+      - 'scripts/test_host_memory_integration.py'
 
 permissions:
   contents: read
@@ -72,12 +75,15 @@ jobs:
           cp ci/.github/workflows/build-droidvm-mali-host.yml out/
           cp ci/scripts/dmabuf_import_guard.h ci/scripts/test_dmabuf_import_guard.cpp out/
           cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
+          cp ci/scripts/host_memory_contract.h ci/scripts/test_host_memory_contract.cpp out/
+          cp ci/scripts/test_host_memory_integration.py out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
         run: |
           set -euo pipefail
           c++ -std=c++17 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
             -Ivulkan-headers/include -Ici/scripts \
             ci/scripts/test_dmabuf_import_guard.cpp -o "$RUNNER_TEMP/test-dmabuf-import-guard"
           "$RUNNER_TEMP/test-dmabuf-import-guard" | tee out/dmabuf-guard-tests.txt
@@ -125,6 +131,20 @@ jobs:
           print('PASS: production embeds exact tested helper, unnegotiated gate precedes backing acquisition; default fd guard retained')
           PY_CHECK
 
+      - name: Run fail-closed host pointer and physical coherent contract tests (no GPU)
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ivulkan-headers/include -Ici/scripts \
+            ci/scripts/test_host_memory_contract.cpp -o "$RUNNER_TEMP/test-host-memory-contract"
+          "$RUNNER_TEMP/test-host-memory-contract" | tee out/host-memory-contract-tests.txt
+          python3 -I ci/scripts/test_host_memory_integration.py source | tee -a out/host-memory-contract-tests.txt
+
       - name: Fetch Android NDK r27c
         shell: bash
         run: |
@@ -168,6 +188,7 @@ jobs:
             --file-header --dynamic out/libgfxstream_backend.so > out/elf-info.txt
           grep -Eq 'Machine:.*AArch64' out/elf-info.txt
           python3 -I - <<'PY'
+          import hashlib
           import json
           import os
           import subprocess
@@ -211,11 +232,24 @@ jobs:
                   "Validate actual host-visible DMA_BUF fd memoryTypeBits; reject incompatible index without changing coherency; close rejected fd and release pool reservation",
                   "Enable supported KHR_external_memory_fd alongside DMA_BUF on decoder and internal devices; bounded device/dispatch and successful-query diagnostics",
                   "Default-disabled staging contract readiness gate rejects opt-in emulated guest-coherent allocations until paired backend/guest negotiation exists; no memory flag rewrite",
-                  "Shared bounded identity/range/epoch state machine embedded in production; transfer callbacks exercised only by CPU mocks"
+                  "Shared bounded identity/range/epoch state machine embedded in production; transfer callbacks exercised only by CPU mocks",
+                  "Validate exact final-chain host pointer once before driver allocation in decoder and internal aliases; reject null/function/query/type/index/mask mismatch without fallback or borrowed-pointer free",
+                  "Unconditional guest HOST_COHERENT to physical noncoherent rejection before backing acquisition, including alias and transformed indices; native coherent and noncoherent remain permitted"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
               "source_patch": "gfxstream-android-mali.patch (excludes separately pinned Vulkan-Headers replacement)",
+              "host_memory_contract": {
+                  "coherent_downgrade": "unconditional reject before backing acquisition; no environment bypass",
+                  "physical_flags": "queried separately from shadow routing flags; never rewritten",
+                  "pointer_type": "HOST_ALLOCATION_BIT_EXT only; foreign mapped type not intentionally supported",
+                  "pointer_query": "exact final import chain, requested host index unchanged; failed query is never accepted",
+                  "ownership": "helper borrows pointer only; private/shared backing RAII retained; local owned fd/pool cleaned on defensive mixed-chain rejection",
+                  "native_coherent": "permitted subject to exact import compatibility; masks do not generalize across exporters",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['host_memory_contract.h', 'test_host_memory_contract.cpp',
+                                          'test_host_memory_integration.py', 'host-memory-contract-tests.txt']}
+              },
               "staging_contract": {
                   "default_enabled": False,
                   "environment_opt_in": "GFXSTREAM_EXPERIMENTAL_STAGING_CONTRACT=1 enables rejection only",
