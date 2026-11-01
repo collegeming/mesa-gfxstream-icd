@@ -35,6 +35,14 @@ assert helper.index('return Result::Mismatch;') < helper.index('*first = 0x89abc
 assert 'bytes + 4092' in helper
 assert 'reinterpret_cast<uintptr_t>(pointer) <= UINTPTR_MAX - 4095' in helper
 assert 'atomic_thread_fence' in helper and 'fetch_add' not in helper
+assert 'getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_REVERSE").c_str()' in g
+assert 'if (!forwardMode && !reverseMode) return original;' in g
+assert 'direction=reverse' in g and 'request-match=%d reply-written=%d' in g
+assert 'native_crossview::reverseProcessBudget()' in g
+reverse = helper[helper.index('inline Result reverse('):]
+assert reverse.index('if (!valid(guard, pointer))') < reverse.index('if (!budget.consume())') < reverse.index('seen.first = *first;')
+assert 'return Result::Mismatch' not in reverse
+assert '*first = 0x89abcdefu;' in reverse and '*last = 0xfedcba98u;' in reverse
 assert '*first' in helper and '*last' in helper
 patch = Path(__file__).with_name('patch_native_cpu_crossview.py').read_text()
 for forbidden in ['vkInvalidateMappedMemoryRanges(', 'vkFlushMappedMemoryRanges(', 'vkQueueSubmit(',
