@@ -49,8 +49,9 @@ edit(manager, '''void ExternalObjectManager::addMapping(uint32_t ctxId, uint64_t
 }''', '''bool ExternalObjectManager::addMapping(uint32_t ctxId, uint64_t blobId,
                                         const std::shared_ptr<native::Allocation>& owner,
                                         uint32_t caching) {
-    // Native publication is not enabled until real VMM negotiation exists.
-    if (!native::publicationReady() || !owner || !owner->generation()) return false;
+    // This internal registry grants no VMM readiness. Decoder publication and
+    // resource Map independently enforce the immutable fail-closed gate.
+    if (!owner || !owner->generation()) return false;
     HostMemInfo info{owner->address(), caching, owner, owner->generation()};
     auto key = std::make_pair(ctxId, blobId);
     std::lock_guard<std::mutex> lock(mMutex);
@@ -90,7 +91,7 @@ edit(decoder, '        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;'
             !m_vkEmulation->getFeatures().ExternalBlob.enabled() &&
             !importEmulatedExternalMemory && !diagnosticFdInfo && !diagnosticAhb &&
             !diagnosticHostPtr && !sharedMemory.has_value() && !privateMemory &&
-            poolOffset < 0 && !createBlobInfoPtr;
+            poolOffset < 0 && folioCharge.bytes() == 0 && !createBlobInfoPtr;
         if (nativeAllocation) {
             auto* nativeDevice = gfxstream::base::find(mDeviceInfo, device);
             auto* nativeInstance = nativeDevice ?
@@ -144,7 +145,7 @@ edit(decoder, '''        } else if (!info->needUnmap) {
         } else if (!info->needUnmap) {
             VkResult mapResult = vk->vkMapMemory''')
 edit(decoder, '''        if (info->needUnmap) {
-            uint64_t hva''', '''        if (info->needUnmap) {
+            uint64_t hva''', '''        if (info->needUnmap && !m_vkEmulation->getFeatures().ExternalBlob.enabled()) {
             if (info->nativeOwner) info->nativeOwner->mapped(info->ptr);
             uint64_t hva''')
 edit(decoder, '''            ExternalObjectManager::get()->addMapping(virtioGpuContextId, hostBlobId,

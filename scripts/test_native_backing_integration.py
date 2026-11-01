@@ -17,7 +17,13 @@ assert 'std::make_shared<native::Allocation>' in d
 assert 'nativeDevice->nativeLifetime, device, *pMemory, memoryInfo.size,' in d
 assert 'generation, vk->vkUnmapMemory, vk->vkFreeMemory' in d
 assert 'native::publicationReady() || !info->nativeOwner' in d
-assert 'native::publicationReady() || !owner' in m
+assert 'if (!owner || !owner->generation()) return false;' in m
+assert 'poolOffset < 0 && folioCharge.bytes() == 0 && !createBlobInfoPtr' in d
+assert 'if (info->needUnmap && !m_vkEmulation->getFeatures().ExternalBlob.enabled())' in d
+assert 'if (info->nativeOwner) info->nativeOwner->mapped(info->ptr);' in d
+frontend = read('host/virtio_gpu_frontend.cpp')
+assert 'if (resource.Destroy() != 0)' in frontend
+assert frontend.index('if (resource.Destroy() != 0)') < frontend.index('mResources.erase(resourceIt);')
 assert 'native::publicationReady() || !memory.owner' in r
 assert 'getEnvironmentVariable' not in helper
 assert 'inline constexpr bool publicationReady() { return false; }' in helper
