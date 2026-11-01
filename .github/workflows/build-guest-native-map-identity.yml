@@ -1,0 +1,80 @@
+name: build-guest-native-map-identity
+on:
+  push:
+    branches: [diagnostic/guest-native-map-identity]
+    paths:
+      - 'diagnostic/*guest_native_map_identity*'
+      - '.github/workflows/build-guest-native-map-identity.yml'
+permissions:
+  contents: read
+jobs:
+  cpu-tests-and-guest-compile-only:
+    if: github.ref == 'refs/heads/diagnostic/guest-native-map-identity'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils file libvulkan-dev python3
+      - name: Source allowlists and actual CPU helper sanitizers only
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I diagnostic/check_guest_native_map_identity.py diagnostic/guest_native_map_identity.c | tee out/source-safety.txt
+          gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            diagnostic/test_guest_native_map_identity.c -o out/cpu-helper-test
+          nm -u out/cpu-helper-test | tee out/cpu-helper-imports.txt
+          if grep -Eq '\bvk[A-Z]|libvulkan' out/cpu-helper-imports.txt; then exit 1; fi
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ./out/cpu-helper-test | tee out/cpu-helper-tests.txt
+      - name: Compile real guest executable and inspect only NEVER execute
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -g -fPIE -pie -fno-omit-frame-pointer \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wl,-z,relro,-z,now \
+            -DPROBE_REVISION=\""$GITHUB_SHA"\" diagnostic/guest_native_map_identity.c \
+            -o out/guest_native_map_identity -lvulkan 2>&1 | tee out/compiler.log
+          file out/guest_native_map_identity | tee out/binary-info.txt
+          readelf -h -l -d -V -n out/guest_native_map_identity | tee out/elf-info.txt
+          nm -u out/guest_native_map_identity | tee out/undefined-symbols.txt
+          python3 -I diagnostic/check_guest_native_map_identity.py diagnostic/guest_native_map_identity.c \
+            out/undefined-symbols.txt out/elf-info.txt | tee out/symbol-safety.txt
+      - name: Package source tests provenance and hashes
+        run: |
+          set -euo pipefail
+          {
+            printf 'probe=guest-native-map-identity-v1\nrepository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'run=%s/%s/actions/runs/%s\nattempt=%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'baseCommit=22ac42cb9e28e77068658a81c418245aaef1571e\nrunner=ubuntu-24.04-arm\n'
+            uname -a
+            gcc --version
+            ldd --version
+            dpkg-query -W libc6 libvulkan-dev libvulkan1
+            printf 'execution=CPU-only production helper ASan/UBSan; guest Vulkan executable NEVER executed\n'
+            printf 'boundary=one allocation4096 type8 one map; one fault read plus two marker writes; own maps/pagemap read only; one sleep45 no retries; no resources, queue retrieval, commands, host hook or cache operations\n'
+            printf 'metadata=raw present63/swapped62/low55 guestPFN and guestIPA NOT hostPFN; unavailable/redacted/PFN0 is FAIL; hold remains useful; no coherence or BAR identity proof\n'
+            printf 'review=parent source review before device; --allow-mapping-identity before Vulkan; kernel hang/root loss possible; no device action in this workflow\n'
+          } | tee out/build-provenance.txt
+          cp diagnostic/guest_native_map_identity.c diagnostic/test_guest_native_map_identity.c \
+            diagnostic/check_guest_native_map_identity.py .github/workflows/build-guest-native-map-identity.yml out/
+          rm out/cpu-helper-test
+          (cd out && sha256sum * > SHA256SUMS)
+          tar -czf guest-native-map-identity-aarch64-glibc.tar.gz -C out .
+          sha256sum guest-native-map-identity-aarch64-glibc.tar.gz | tee guest-native-map-identity-aarch64-glibc.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-native-map-identity-aarch64-glibc
+          path: |
+            guest-native-map-identity-aarch64-glibc.tar.gz
+            guest-native-map-identity-aarch64-glibc.tar.gz.sha256
+            out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
