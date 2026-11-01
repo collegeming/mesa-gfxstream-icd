@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Fail-closed source invariants, run only in Actions against patched pinned source."""
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+def read(rel): return (root / rel).read_text()
+d = read('host/vulkan/vk_decoder_global_state.cpp')
+m = read('host/common/external_object_manager.cpp')
+h = read('host/common/include/gfxstream/host/external_object_manager.h')
+r = read('host/virtio_gpu_resource.cpp')
+s = read('host/vulkan/vk_decoder_internal_structs.h')
+helper = Path(__file__).with_name('native_backing_lease.h').read_text().replace('#pragma once\n', '')
+assert helper in h
+assert 'std::shared_ptr<native::Allocation> nativeOwner;' in s
+assert 'std::shared_ptr<native::Allocation> owner;' in h
+assert 'std::make_shared<native::Allocation>' in d
+assert 'nativeDevice->nativeLifetime, device, *pMemory, memoryInfo.size,' in d
+assert 'generation, vk->vkUnmapMemory, vk->vkFreeMemory' in d
+assert 'native::publicationReady() || !info->nativeOwner' in d
+assert 'native::publicationReady() || !owner' in m
+assert 'native::publicationReady() || !memory.owner' in r
+assert 'getEnvironmentVariable' not in helper
+assert 'inline constexpr bool publicationReady() { return false; }' in helper
+assert 'const auto destroy = deviceDispatch->vkDestroyDevice;' in d
+assert 'const auto destroy = dispatch->vkDestroyInstance;' in d
+assert '[device, destroy, boxed]' in d and 'debugContext]' in d
+assert 'return mHostMemInfos.emplace(key, std::move(info)).second;' in m
+assert 'it->second.generation == generation' in m
+assert 'retired.push_back(std::move(it->second));' in m
+assert 'std::optional<HostMemInfo> ret = std::move(found->second);' in m
+unmap = r[r.index('int VirtioGpuResource::Unmap()'):r.index('int VirtioGpuResource::GetInfo(')]
+assert 'mNativeMapState.unmap()' in unmap and '.reset()' not in unmap
+assert 'mNativeMapState.active()) return -EBUSY' in r
+assert 'info->nativeOwner, info->caching' in d
+assert 'native::validExtent(*info->nativeOwner, info->size, nativePage)' in d
+assert 'native::Lifetime>(nativeInstance->nativeLifetime)' in d
+assert 'no native owner/VMM contract' in d
+# Existing descriptor-producing paths still exist, and import ABI guards remain.
+for marker in ['STREAM_HANDLE_TYPE_MEM_POOL', 'STREAM_HANDLE_TYPE_MEM_SHM',
+               'exportMemoryHandle(deviceInfo, vk, device, memory)',
+               'validateHostPointerImport(', 'validateHostVisibleDmaBufImport(']:
+    assert marker in d
+print('PASS: production owner propagation, device/instance finalizers, all-generation revocation, retained unmap/remap, fail-closed raw native/imported paths; descriptor paths retained')
+print('BLOCKERS: no negotiated VMM identity/ack/quarantine contract; device child teardown still synchronous outside mMutex; no guest/PFN/cache/GPU validation')

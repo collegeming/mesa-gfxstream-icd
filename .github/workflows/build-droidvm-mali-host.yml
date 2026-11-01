@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -15,6 +15,7 @@ on:
       - 'scripts/host_memory_contract.h'
       - 'scripts/test_host_memory_contract.cpp'
       - 'scripts/test_host_memory_integration.py'
+      - 'scripts/*native_backing*'
 
 permissions:
   contents: read
@@ -67,6 +68,7 @@ jobs:
           git -C vulkan-headers archive HEAD | tar -x -C source/third_party/vulkan_headers
           python3 -I ci/scripts/patch_droidvm_build.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_droidvm_mali_host.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/patch_native_backing_lease.py "$GITHUB_WORKSPACE/source"
           git -C source diff --check
           mkdir out
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
@@ -77,6 +79,7 @@ jobs:
           cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
           cp ci/scripts/host_memory_contract.h ci/scripts/test_host_memory_contract.cpp out/
           cp ci/scripts/test_host_memory_integration.py out/
+          cp ci/scripts/*native_backing* out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -144,6 +147,20 @@ jobs:
             ci/scripts/test_host_memory_contract.cpp -o "$RUNNER_TEMP/test-host-memory-contract"
           "$RUNNER_TEMP/test-host-memory-contract" | tee out/host-memory-contract-tests.txt
           python3 -I ci/scripts/test_host_memory_integration.py source | tee -a out/host-memory-contract-tests.txt
+
+      - name: Run production native allocation lifetime tests and source invariants (no GPU)
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ivulkan-headers/include -Ici/scripts \
+            ci/scripts/test_native_backing_lease.cpp -o "$RUNNER_TEMP/test-native-backing"
+          "$RUNNER_TEMP/test-native-backing" | tee out/native-backing-tests.txt
+          python3 -I ci/scripts/test_native_backing_integration.py source | tee -a out/native-backing-tests.txt
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -249,6 +266,18 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['host_memory_contract.h', 'test_host_memory_contract.cpp',
                                           'test_host_memory_integration.py', 'host-memory-contract-tests.txt']}
+              },
+              "native_backing_lease": {
+                  "production_ready": False,
+                  "publication_enabled": False,
+                  "pairing": "No VMM identity/ack negotiation; all raw publication hard rejected, no environment bypass",
+                  "scope": "Native host-visible nonexternal VirtioGpuNext only; imported fd/AHB/shared/private/pool paths not converted",
+                  "ownership": "MemoryInfo to HostMemInfo to resource; generation revocation; unmap retains owner for remap; allocation keeps device and parent instance; worker physical finalizers capture Vulkan entrypoints/handles by value",
+                  "remaining_blockers": ["Real paired VMM unregister acknowledgement, uncertain registration quarantine, retry/reset/drop policy", "Move entire native device child retirement off decoder command thread; current idle is outside mMutex but still synchronous", "Process/reset shutdown lifetime of global driver lock and Vulkan loader for asynchronous finalizers", "Runtime guest PFN, cache attributes and GPU coherency validation"],
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['native_backing_lease.h', 'patch_native_backing_lease.py',
+                                          'test_native_backing_lease.cpp', 'test_native_backing_integration.py',
+                                          'native-backing-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
