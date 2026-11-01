@@ -19,8 +19,8 @@ jobs:
       # Last real upstream revision before Linux 6.14 securebits requirement; matches r27c headers and bindgen0.63 lock.
       MINIJAIL_COMMIT: 8330e01d0fd55dfe505890eb5f829b77ac4ca8cb
       APK_SHA256: 9c0b80c2be0717e8adcc768cdcc910d89443250fedaa9350574fad1df5af5b2c
-      BACKEND_ARTIFACT: '13075596084'
-      BACKEND_SHA256: d6fb372614583f85454d098ea4e9567222a8447dc1b18bcec75e9087476c0d9e
+      BACKEND_ARTIFACT: '13077002513'
+      BACKEND_SHA256: a95c3137af9bec2283071f5175194bf43ed4e0048bee5e7fa62d5be1d5bca88a
       RUSTUP_TOOLCHAIN: 1.90.0
       CARGO_TERM_COLOR: never
       CARGO_BUILD_JOBS: '4'
@@ -132,13 +132,16 @@ jobs:
           export RANLIB="$TC/bin/llvm-ranlib"
           make -C libcap-source/libcap -j4 libcap.a CC="$CC" BUILD_CC=gcc BUILD_CFLAGS=-O2 AR="$AR" RANLIB="$RANLIB" BUILD_GPERF=no
           cp libcap-source/libcap/libcap.a native-libs/
-          (cd libffi-source && ./autogen.sh)
+          mkdir -p downloads/libffi extracted/libffi
+          test -f downloads/libffi/libffi.tar.gz || curl --fail --location --retry 3 -o downloads/libffi/libffi.tar.gz https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+          printf '%s  %s\n' b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e downloads/libffi/libffi.tar.gz | sha256sum -c -
+          tar -xf downloads/libffi/libffi.tar.gz -C extracted/libffi
           mkdir -p libffi-build
-          (cd libffi-build && ../libffi-source/configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static --with-pic && make -j4 && make install)
+          (cd libffi-build && ../extracted/libffi/libffi-3.4.6/configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static --with-pic && make -j4 && make install)
           printf "[binaries]\nc = '%s'\ncpp = '%s'\nar = '%s'\nstrip = '%s'\npkg-config = '/usr/bin/pkg-config'\n[properties]\npkg_config_libdir = '%s/lib/pkgconfig'\n[host_machine]\nsystem = 'android'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'\n" "$CC" "$CXX" "$AR" "$TC/bin/llvm-strip" "$PREFIX" > wayland-cross.ini
           meson setup wayland-build wayland-source --cross-file wayland-cross.ini --prefix "$PREFIX" --default-library static -Dscanner=false -Dtests=false -Ddocumentation=false -Ddtd_validation=false
           ninja -C wayland-build src/libwayland-client.a
-          cp wayland-build/src/libwayland-client.a wayland-build/src/libwayland-private.a "$PREFIX/lib/libffi.a" native-libs/
+          cp wayland-build/src/libwayland-client.a wayland-build/src/libwayland-private.a wayland-build/src/libwayland-util.a "$PREFIX/lib/libffi.a" native-libs/
           find wayland-build -name '*.a' -print | tee evidence/wayland-static-archives.txt
           sha256sum native-libs/* | tee evidence/native-checksums.txt
       - name: Android Cargo check discovery (real native build scripts, no stubs)
@@ -236,7 +239,7 @@ jobs:
           s = p.read_text()
           old = 'println!("cargo:rustc-link-lib=dylib=wayland-client");'
           assert s.count(old) == 1
-          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=wayland-private");\n    println!("cargo:rustc-link-lib=static=ffi");'))
+          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=wayland-private");\n    println!("cargo:rustc-link-lib=static=wayland-util");\n    println!("cargo:rustc-link-lib=static=ffi");'))
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
