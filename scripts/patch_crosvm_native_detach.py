@@ -25,7 +25,7 @@ def main():
     s = replace(s, 'struct VirtioGpuResource {', '#[path = "blob_detach.rs"]\nmod blob_detach;\n\nstruct VirtioGpuResource {')
     s = replace(s, '    rutabaga_external_mapping: bool,', '    rutabaga_external_mapping: bool,\n    // Unknown register response: no unmap/unref/reset until external reconciliation.\n    mapping_quarantined: bool,')
     s = replace(s, '            rutabaga_external_mapping: false,', '            rutabaga_external_mapping: false,\n            mapping_quarantined: false,')
-    s = replace(s, '    rutabaga: Rutabaga,', '    rutabaga: std::mem::ManuallyDrop<Rutabaga>,')
+    s = replace(s, '\n    rutabaga: Rutabaga,', '\n    rutabaga: std::mem::ManuallyDrop<Rutabaga>,')
     s = replace(s, '            rutabaga,', '            rutabaga: std::mem::ManuallyDrop::new(rutabaga),')
     start = s.index('        let mut resource = self\n', s.index('    pub fn unref_resource('))
     s = s[:start] + '        self.detach_blob_mapping(resource_id)?;\n' + s[start:]
