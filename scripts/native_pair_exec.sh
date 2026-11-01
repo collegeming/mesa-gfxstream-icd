@@ -1,8 +1,7 @@
 #!/system/bin/sh
 # Immutable candidate only; caller supplies the existing crosvm argv unchanged.
 root=/data/local/tmp/droidvm-native-pair-v1
-fail() { printf '%s
-' "native-pair: $*" >&2; exit 2; }
+fail() { printf '%s\n' "native-pair: $*" >&2; exit 2; }
 [ -f "$root/bin/crosvm" ] && [ -x "$root/bin/crosvm" ] || fail 'candidate executable missing'
 [ -f "$root/lib/libgfxstream_backend.so" ] && [ -r "$root/lib/libgfxstream_backend.so" ] || fail 'host library unreadable'
 
