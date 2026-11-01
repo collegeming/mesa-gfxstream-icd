@@ -101,8 +101,8 @@ edit(d, '            deviceOpTracker = deviceInfo->deviceOpTracker.get();', '   
 edit(d, 'dispatchVkQueueSubmit(vk, queue, submitCount, pSubmits, usedFence)', 'dispatchVkQueueSubmit(vk, queue, submitCount, pSubmits, usedFence, nativeRoundtripAllowed)')
 # Both overloads receive the immutable gate by value; original driver calls stay exact.
 for submit_type in ['VkSubmitInfo', 'VkSubmitInfo2']:
-    edit(d, f'                                   const {submit_type}* pSubmits, VkFence fence) {{',
-         f'                                   const {submit_type}* pSubmits, VkFence fence, bool nativeRoundtripAllowed) {{')
+    edit(d, f'    VkResult dispatchVkQueueSubmit(VulkanDispatch* vk, VkQueue unboxed_queue, uint32_t submitCount,\n                                   const {submit_type}* pSubmits, VkFence fence) {{',
+         f'    VkResult dispatchVkQueueSubmit(VulkanDispatch* vk, VkQueue unboxed_queue, uint32_t submitCount,\n                                   const {submit_type}* pSubmits, VkFence fence, bool nativeRoundtripAllowed) {{')
 # Preserve each original driver expression byte-for-byte; only wrap original return.
 edit(d, '''        VkResult res = vk->vkQueueSubmit(unboxed_queue, submitCount, pSubmits, fence);''', '''        const bool nativeTraceSubmit = traceNativeSubmit(nativeRoundtripAllowed, unboxed_queue, submitCount, pSubmits, fence);
         VkResult res = vk->vkQueueSubmit(unboxed_queue, submitCount, pSubmits, fence);
