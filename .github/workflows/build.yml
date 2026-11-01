@@ -43,7 +43,7 @@ jobs:
       - name: Configure Mesa (Vulkan gfxstream ICD only)
         run: |
           cd mesa
-          meson setup build --buildtype=release -Dwerror=false \
+          meson setup build --buildtype=debugoptimized -Dwerror=false \
             -Dvulkan-drivers=gfxstream \
             -Dgallium-drivers= \
             -Dplatforms= \
@@ -58,6 +58,41 @@ jobs:
           ninja -C build
           find build -name 'libvulkan_gfxstream*' -o -name 'gfxstream_vk_icd*' | head -20
 
+      - name: Build backtrace helper
+        run: |
+          mkdir -p out
+          cat > bt.c <<'EOF'
+          #define _GNU_SOURCE
+          #include <signal.h>
+          #include <execinfo.h>
+          #include <unistd.h>
+          #include <string.h>
+
+          static void handler(int sig) {
+              void *bt[64];
+              char msg[] = "
+=== BACKTRACE ===
+";
+              int n = backtrace(bt, 64);
+              write(2, msg, sizeof(msg) - 1);
+              backtrace_symbols_fd(bt, n, 2);
+              signal(sig, SIG_DFL);
+              raise(sig);
+          }
+
+          __attribute__((constructor)) static void bt_init(void) {
+              struct sigaction sa;
+              memset(&sa, 0, sizeof(sa));
+              sa.sa_handler = handler;
+              sa.sa_flags = SA_NODEFER;
+              sigaction(SIGSEGV, &sa, 0);
+              sigaction(SIGABRT, &sa, 0);
+              sigaction(SIGBUS, &sa, 0);
+          }
+          EOF
+          gcc -shared -fPIC -O1 -g -o out/libbt.so bt.c
+          ls -l out
+
       - name: Package
         run: |
           mkdir -p out
@@ -65,12 +100,13 @@ jobs:
           echo "picked: $SO"
           test -n "$SO"
           cp "$SO" out/libvulkan_gfxstream.so
-          strip --strip-unneeded out/libvulkan_gfxstream.so || true
           ls -l out
           file out/libvulkan_gfxstream.so || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: libvulkan_gfxstream-${{ github.run_number }}
-          path: out/libvulkan_gfxstream.so
+          path: |
+            out/libvulkan_gfxstream.so
+            out/libbt.so
           if-no-files-found: error
