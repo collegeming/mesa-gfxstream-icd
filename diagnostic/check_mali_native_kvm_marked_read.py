@@ -44,7 +44,8 @@ assert 'vkMapMemory(device, allocation, 0, size, 0, &mapped_pointer)' in native
 assert 'status = run_read(address, mode);' in native
 assert native.count('*(volatile uint32_t *)mapped_pointer') == 2
 store = native.index('*(volatile uint32_t *)mapped_pointer = MARKER;')
-barrier = native.index('__asm__ volatile("dsb sy" ::: "memory");')
+barrier = native.index('__asm__ volatile(')
+assert '__asm__ volatile("dsb sy" ::: "memory");' in source
 run_call = native.index('status = run_read(address, mode);')
 readback = native.index('uint32_t host_after = *(volatile uint32_t *)mapped_pointer;')
 assert native.index('if (!inspect_vma(address, size))') < store < barrier < run_call < readback < native.index('vkUnmapMemory(')
