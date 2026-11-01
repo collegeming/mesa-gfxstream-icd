@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -18,6 +18,7 @@ on:
       - 'scripts/*native_backing*'
       - 'scripts/*native_roundtrip*'
       - 'scripts/*native_cpu_crossview*'
+      - 'scripts/*native_cpu_reverse*'
 
 permissions:
   contents: read
@@ -92,6 +93,7 @@ jobs:
           cp ci/scripts/*native_backing* out/
           cp ci/scripts/*native_roundtrip* out/
           cp ci/scripts/*native_cpu_crossview* out/
+          cp ci/scripts/*native_cpu_reverse* out/
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -204,6 +206,10 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer -Ici/scripts \
             ci/scripts/test_native_cpu_crossview.cpp -o "$RUNNER_TEMP/test-native-cpu-crossview"
           "$RUNNER_TEMP/test-native-cpu-crossview"
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Ici/scripts \
+            ci/scripts/test_native_cpu_reverse.cpp -o "$RUNNER_TEMP/test-native-cpu-reverse"
+          "$RUNNER_TEMP/test-native-cpu-reverse"
           python3 -I ci/scripts/test_native_cpu_crossview_integration.py "$RUNNER_TEMP/native-crossview-before" source | tee out/native-cpu-crossview-tests.txt
 
       - name: Fetch Android NDK r27c
@@ -348,6 +354,14 @@ jobs:
                              for name in ['native_cpu_crossview.h', 'patch_native_cpu_crossview.py',
                                           'test_native_cpu_crossview.cpp', 'test_native_cpu_crossview_integration.py',
                                           'native-cpu-crossview-tests.txt']}
+              },
+              "native_cpu_reverse": {
+                  "default_enabled": False,
+                  "gate": "GFXSTREAM_NATIVE_CPU_REVERSE exactly1 AND app exactly guest-native-cpu-reverse; independent one-shot budget",
+                  "scope": "Same validated actual coherent native owner/range/epoch/unbound guards as forward; after existing native flush succeeds",
+                  "payload": "Two request observations then two reply writes at0/4092 intentionally even on request mismatch; direction=reverse request-match logged separately; forward exchange unchanged",
+                  "boundary": "Reverse visibility diagnostic only, not a forward handshake/GPU/maintenance-free coherence proof; no additional cache maintenance",
+                  "test_sha256": hashlib.sha256(Path('out/test_native_cpu_reverse.cpp').read_bytes()).hexdigest()
               },
               "staging_contract": {
                   "default_enabled": False,

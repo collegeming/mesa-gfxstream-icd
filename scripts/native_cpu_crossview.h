@@ -48,4 +48,25 @@ inline Result exchange(const Guard& guard, void* pointer, Budget& budget, Observ
     std::atomic_thread_fence(std::memory_order_release);
     return Result::Replied;
 }
+// Independent reverse-only diagnostic. Never changes exchange's request-match rule.
+inline bool reverseEnabled(const char* env, const char* app) {
+    return env && std::strcmp(env, "1") == 0 && app &&
+        std::strcmp(app, "guest-native-cpu-reverse") == 0;
+}
+inline Budget& reverseProcessBudget() { static auto* budget = new Budget; return *budget; }
+inline Result reverse(const Guard& guard, void* pointer, Budget& budget, Observation& seen) {
+    if (!valid(guard, pointer)) return Result::Invalid;
+    if (!budget.consume()) return Result::Exhausted;
+    std::atomic_thread_fence(std::memory_order_acquire); // ordering, not cache maintenance
+    auto* bytes = static_cast<uint8_t*>(pointer);
+    auto* first = reinterpret_cast<volatile uint32_t*>(bytes);
+    auto* last = reinterpret_cast<volatile uint32_t*>(bytes + 4092);
+    seen.first = *first;
+    seen.last = *last;
+    // Intentional host->guest test: forward request mismatch does NOT prevent replies.
+    *first = 0x89abcdefu;
+    *last = 0xfedcba98u;
+    std::atomic_thread_fence(std::memory_order_release);
+    return Result::Replied;
+}
 }}} // namespace gfxstream::host::native_crossview

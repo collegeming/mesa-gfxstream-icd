@@ -24,14 +24,20 @@ method = '''    VkResult nativeCpuCrossviewAfterFlush(VkDevice device, uint32_t 
         uint64_t generation = 0;
         uint64_t blob = 0;
         VkDeviceMemory memory = VK_NULL_HANDLE;
+        bool reverseMode = false;
         {
             std::lock_guard<std::mutex> lock(mMutex);
             const auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
             const auto* instance = deviceInfo ?
                 gfxstream::base::find(mInstanceInfo, deviceInfo->parentInstance) : nullptr;
-            if (!instance || !native_crossview::enabled(
-                    gfxstream::base::getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_CROSSVIEW").c_str(),
-                    instance->applicationName.c_str())) return original;
+            if (!instance) return original;
+            reverseMode = native_crossview::reverseEnabled(
+                gfxstream::base::getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_REVERSE").c_str(),
+                instance->applicationName.c_str());
+            const bool forwardMode = native_crossview::enabled(
+                gfxstream::base::getEnvironmentVariable("GFXSTREAM_NATIVE_CPU_CROSSVIEW").c_str(),
+                instance->applicationName.c_str());
+            if (!forwardMode && !reverseMode) return original;
             if (count != 1 || !ranges) {
                 GFXSTREAM_ERROR("NATIVE-CPU-CROSSVIEW: invalid-range-count count=%u no-payload-access", count);
                 return VK_ERROR_VALIDATION_FAILED_EXT;
@@ -73,6 +79,18 @@ method = '''    VkResult nativeCpuCrossviewAfterFlush(VkDevice device, uint32_t 
             return VK_ERROR_VALIDATION_FAILED_EXT;
         }
         native_crossview::Observation observed;
+        if (reverseMode) {
+            const auto reverseResult = native_crossview::reverse(guard, owner->address(),
+                native_crossview::reverseProcessBudget(), observed);
+            GFXSTREAM_INFO("NATIVE-CPU-REVERSE: direction=reverse device=%p memory=%p gen=%llu blob=%llu outcome=%u "
+                "observed-first=0x%08x observed-last=0x%08x request-match=%d reply-written=%d "
+                "not-forward-handshake-not-gpu-coherence",
+                (void*)device, (void*)memory, (unsigned long long)generation, (unsigned long long)blob,
+                (unsigned)reverseResult, observed.first, observed.last,
+                observed.first == 0x13579bdfu && observed.last == 0x2468ace0u,
+                reverseResult == native_crossview::Result::Replied);
+            return reverseResult == native_crossview::Result::Replied ? original : VK_ERROR_VALIDATION_FAILED_EXT;
+        }
         const auto result = native_crossview::exchange(guard, owner->address(),
                                                      native_crossview::processBudget(), observed);
         GFXSTREAM_INFO("NATIVE-CPU-CROSSVIEW: device=%p memory=%p gen=%llu blob=%llu outcome=%u "
