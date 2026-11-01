@@ -23,6 +23,8 @@ jobs:
       BACKEND_SHA256: d6fb372614583f85454d098ea4e9567222a8447dc1b18bcec75e9087476c0d9e
       RUSTUP_TOOLCHAIN: 1.90.0
       CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '4'
+      CARGO_PROFILE_RELEASE_DEBUG: '1'
     steps:
       - name: Checkout pinned production crosvm source (unpatched baseline)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -38,6 +40,21 @@ jobs:
           ref: ${{ env.MINIJAIL_COMMIT }}
           path: minijail
           persist-credentials: false
+      - name: Restore pinned Android native inputs
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: downloads
+          key: android-native-r27c-${{ env.APK_SHA256 }}-${{ env.BACKEND_SHA256 }}
+      - name: Restore Cargo registry and build outputs
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-${{ github.sha }}
+          restore-keys: |
+            android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-
       - name: Prepare real Android toolchain and native artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,16 +70,16 @@ jobs:
           test -f source/third_party/minijail/rust/minijail/Cargo.toml
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libclang-dev libwayland-dev wayland-protocols libcap-dev pkg-config
-          curl --fail --location --retry 3 -o downloads/apk/droidvm.apk https://github.com/Droid-VM/DroidVM/releases/download/0.0.6/DroidVM-v0.0.6.apk
+          test -f downloads/apk/droidvm.apk || curl --fail --location --retry 3 -o downloads/apk/droidvm.apk https://github.com/Droid-VM/DroidVM/releases/download/0.0.6/DroidVM-v0.0.6.apk
           printf '%s  %s\n' "$APK_SHA256" downloads/apk/droidvm.apk | sha256sum -c -
           unzip -q downloads/apk/droidvm.apk -d extracted/apk
           find extracted/apk -type f -name '*.so' | tee evidence/apk-libraries.txt
-          gh api "repos/collegeming/mesa-gfxstream-icd/actions/artifacts/$BACKEND_ARTIFACT/zip" > downloads/backend/artifact.zip
+          test -f downloads/backend/artifact.zip || gh api "repos/collegeming/mesa-gfxstream-icd/actions/artifacts/$BACKEND_ARTIFACT/zip" > downloads/backend/artifact.zip
           printf '%s  %s\n' "$BACKEND_SHA256" downloads/backend/artifact.zip | sha256sum -c -
           unzip -q downloads/backend/artifact.zip -d extracted/backend
           find extracted/backend -type f -name libgfxstream_backend.so -exec cp '{}' native-libs/ \;
           test -f native-libs/libgfxstream_backend.so
-          curl --fail --location --retry 3 -o downloads/ndk/ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          test -f downloads/ndk/ndk.zip || curl --fail --location --retry 3 -o downloads/ndk/ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
           printf '%s  %s\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e downloads/ndk/ndk.zip | sha1sum -c -
           unzip -q downloads/ndk/ndk.zip -d extracted/ndk
           NDK="$GITHUB_WORKSPACE/extracted/ndk/android-ndk-r27c"
@@ -135,9 +152,13 @@ jobs:
           p.write_text(s)
           p = Path('source/src/crosvm/sys/linux/device_helpers.rs')
           s = p.read_text()
-          old = '\nfn create_unprivileged_virtio_snd_device('
+          old = 'fn create_unprivileged_virtio_snd_device('
           assert s.count(old) == 1
-          p.write_text(s.replace(old, '#[cfg(feature = "audio")]\n' + old))
+          s = s.replace(old, '#[cfg(feature = "audio")]\n' + old)
+          import re
+          assert re.search(r'(?m)^#\[cfg\(feature = "audio"\)\]\nfn create_unprivileged_virtio_snd_device\(', s)
+          p.write_text(s)
+          Path('evidence/audio-cfg-source.txt').write_text(s[s.index('/// Builds a virtio-snd device whose audio backend'):s.index('/// Builds a virtio-snd device whose audio backend') + 700])
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
@@ -145,6 +166,21 @@ jobs:
           cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
           "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
           sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
+      - name: Save pinned Android input cache
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: downloads
+          key: android-native-r27c-${{ env.APK_SHA256 }}-${{ env.BACKEND_SHA256 }}
+      - name: Save Cargo cache including failed compile progress
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: android-cargo-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-ndk27c-${{ env.BACKEND_SHA256 }}-${{ github.sha }}
       - name: Package discovery evidence (never claim a binary for cargo check)
         if: always()
         shell: bash
