@@ -40,6 +40,34 @@ jobs:
           ref: ${{ env.MINIJAIL_COMMIT }}
           path: minijail
           persist-credentials: false
+      - name: Checkout tested paired detach and lease patches
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/mesa-gfxstream-icd
+          ref: 8b193b4fd5211134b3cdae224157fe93a99fccef
+          path: pair-patches
+          persist-credentials: false
+      - name: Checkout real libcap source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mhiramat/libcap
+          ref: 8c67abc3f5cfa8310dae21e5db464fd990cb71a2
+          path: libcap-source
+          persist-credentials: false
+      - name: Checkout real libffi source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: libffi/libffi
+          ref: 3d0ce1e6fcf19f853894862abcbac0ae78a7be60
+          path: libffi-source
+          persist-credentials: false
+      - name: Checkout real Wayland source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: wayland-mirror/wayland
+          ref: b2649cb3ee6bd70828a17e50beb16591e6066288
+          path: wayland-source
+          persist-credentials: false
       - name: Restore pinned Android native inputs
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
         with:
@@ -69,7 +97,7 @@ jobs:
           test "$(git -C minijail rev-parse HEAD)" = "$MINIJAIL_COMMIT"
           test -f source/third_party/minijail/rust/minijail/Cargo.toml
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libclang-dev libwayland-dev wayland-protocols libcap-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libclang-dev libwayland-dev wayland-protocols libcap-dev pkg-config autoconf automake libtool meson ninja-build
           test -f downloads/apk/droidvm.apk || curl --fail --location --retry 3 -o downloads/apk/droidvm.apk https://github.com/Droid-VM/DroidVM/releases/download/0.0.6/DroidVM-v0.0.6.apk
           printf '%s  %s\n' "$APK_SHA256" downloads/apk/droidvm.apk | sha256sum -c -
           unzip -q downloads/apk/droidvm.apk -d extracted/apk
@@ -93,6 +121,26 @@ jobs:
           "$TC/bin/llvm-readelf" -h -d native-libs/libgfxstream_backend.so > evidence/backend-elf.txt
           # Dependencies are updated explicitly because standalone google/minijail has newer build deps than the AOSP lock.
           cp source/Cargo.lock evidence/Cargo.lock.original
+      - name: Build real Android libcap libffi and Wayland client
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$GITHUB_WORKSPACE/native-prefix"
+          export CC="$TC/bin/aarch64-linux-android33-clang"
+          export CXX="$TC/bin/aarch64-linux-android33-clang++"
+          export AR="$TC/bin/llvm-ar"
+          export RANLIB="$TC/bin/llvm-ranlib"
+          make -C libcap-source/libcap -j4 libcap.a CC="$CC" BUILD_CC=gcc BUILD_CFLAGS=-O2 AR="$AR" RANLIB="$RANLIB" BUILD_GPERF=no
+          cp libcap-source/libcap/libcap.a native-libs/
+          (cd libffi-source && ./autogen.sh)
+          mkdir -p libffi-build
+          (cd libffi-build && ../libffi-source/configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static --with-pic && make -j4 && make install)
+          printf "[binaries]\nc = '%s'\ncpp = '%s'\nar = '%s'\nstrip = '%s'\npkg-config = '/usr/bin/pkg-config'\n[properties]\npkg_config_libdir = '%s/lib/pkgconfig'\n[host_machine]\nsystem = 'android'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'\n" "$CC" "$CXX" "$AR" "$TC/bin/llvm-strip" "$PREFIX" > wayland-cross.ini
+          meson setup wayland-build wayland-source --cross-file wayland-cross.ini --prefix "$PREFIX" --default-library static -Dscanner=false -Dtests=false -Ddocumentation=false -Ddtd_validation=false
+          ninja -C wayland-build src/libwayland-client.a
+          cp wayland-build/src/libwayland-client.a wayland-build/src/libwayland-private.a "$PREFIX/lib/libffi.a" native-libs/
+          find wayland-build -name '*.a' -print | tee evidence/wayland-static-archives.txt
+          sha256sum native-libs/* | tee evidence/native-checksums.txt
       - name: Android Cargo check discovery (real native build scripts, no stubs)
         shell: bash
         run: |
@@ -123,9 +171,11 @@ jobs:
           PY
           mkdir -p "$GITHUB_WORKSPACE/native-headers/sys"
           cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
+          python3 -I pair-patches/scripts/patch_crosvm_native_detach.py "$GITHUB_WORKSPACE/source"
+          python3 -I pair-patches/scripts/patch_crosvm_native_lease.py "$GITHUB_WORKSPACE/source"
           python3 -I - <<'PY'
           from pathlib import Path
-          for name, count in [('devices/src/virtio/rng.rs', 1), ('aarch64/src/fdt.rs', 2)]:
+          for name, count in [('aarch64/src/fdt.rs', 2)]:
               p = Path('source') / name
               s = p.read_text()
               assert s.count('rand::rng()') == count
@@ -152,13 +202,41 @@ jobs:
           p.write_text(s)
           p = Path('source/src/crosvm/sys/linux/device_helpers.rs')
           s = p.read_text()
-          old = 'fn create_unprivileged_virtio_snd_device('
-          assert s.count(old) == 1
-          s = s.replace(old, '#[cfg(feature = "audio")]\n' + old)
           import re
           assert re.search(r'(?m)^#\[cfg\(feature = "audio"\)\]\nfn create_unprivileged_virtio_snd_device\(', s)
           p.write_text(s)
           Path('evidence/audio-cfg-source.txt').write_text(s[s.index('/// Builds a virtio-snd device whose audio backend'):s.index('/// Builds a virtio-snd device whose audio backend') + 700])
+          p = Path('source/src/crosvm/sys/linux/android.rs')
+          s = p.read_text()
+          start = s.index('#[link(name = "processgroup")]')
+          end = s.index('// Apply the listed task profiles', start)
+          s = s[:start] + s[end:]
+          old = '    let owned: Vec<CString> = profiles'
+          assert s.count(old) == 1
+          s = s.replace(old, '''    // Standalone NDK binaries must resolve this optional platform API at runtime.
+              // Empty profiles retain their existing early return; requested profiles fail closed.
+              let handle = unsafe { libc::dlopen(b"libprocessgroup.so\\0".as_ptr().cast(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+              if handle.is_null() {
+                  return Err(anyhow!("libprocessgroup.so unavailable for requested task profiles"));
+              }
+              let symbol = unsafe { libc::dlsym(handle, b"android_set_process_profiles\\0".as_ptr().cast()) };
+              if symbol.is_null() {
+                  unsafe { libc::dlclose(handle); }
+                  return Err(anyhow!("android_set_process_profiles unavailable for requested task profiles"));
+              }
+              type SetProfiles = unsafe extern "C" fn(libc::uid_t, libc::pid_t, libc::size_t, *const *const libc::c_char) -> bool;
+              let android_set_process_profiles: SetProfiles = unsafe { std::mem::transmute(symbol) };
+          ''' + old)
+          old = '        if android_set_process_profiles(libc::getuid(), libc::getpid(), ptrs.len(), ptrs.as_ptr()) {'
+          assert s.count(old) == 1
+          s = s.replace(old, '        let success = android_set_process_profiles(libc::getuid(), libc::getpid(), ptrs.len(), ptrs.as_ptr());\n        libc::dlclose(handle);\n        if success {')
+          p.write_text(s)
+          # Wayland's real static client archive also needs its real private and libffi archives.
+          p = Path('source/gpu_display/build.rs')
+          s = p.read_text()
+          old = 'println!("cargo:rustc-link-lib=dylib=wayland-client");'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=wayland-private");\n    println!("cargo:rustc-link-lib=static=ffi");'))
           PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
