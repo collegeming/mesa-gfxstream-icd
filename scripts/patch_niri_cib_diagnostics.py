@@ -128,7 +128,13 @@ edit(decoder, '''        const auto* physicalInfo = gfxstream::base::find(mPhysd
             gfxstream::base::getEnvironmentVariable("GFXSTREAM_NIRI_IMAGE_TRACE") == "1") {
             static std::atomic<uint32_t> diagnostics{0};
             if (diagnostics.fetch_add(1, std::memory_order_relaxed) < 8) {
-                const auto* views = vk_find_struct<VkImageFormatListCreateInfo>(input);
+                const VkImageFormatListCreateInfo* views = nullptr;
+                for (const auto* node = static_cast<const VkBaseInStructure*>(input->pNext); node; node = node->pNext) {
+                    if (node->sType == VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO) {
+                        views = reinterpret_cast<const VkImageFormatListCreateInfo*>(node);
+                        break;
+                    }
+                }
                 const uint32_t viewCount = views ? views->viewFormatCount : 0;
                 const VkFormat* viewFormats = views ? views->pViewFormats : nullptr;
                 GFXSTREAM_INFO("CIB1-DIAG-QUERY: handle=0x%x marker=%d state=%s handle-null=%d stride=%d "
@@ -163,7 +169,13 @@ edit(decoder, '''        const auto* classicMarker = vk_find_struct<VkNativeBuff
                 gfxstream::base::getEnvironmentVariable("GFXSTREAM_NIRI_IMAGE_TRACE") == "1") {
                 static std::atomic<uint32_t> diagnostics{0};
                 if (diagnostics.fetch_add(1, std::memory_order_relaxed) < 8) {
-                    const auto* views = vk_find_struct<VkImageFormatListCreateInfo>(pCreateInfo);
+                    const VkImageFormatListCreateInfo* views = nullptr;
+                    for (const auto* node = static_cast<const VkBaseInStructure*>(pCreateInfo->pNext); node; node = node->pNext) {
+                        if (node->sType == VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO) {
+                            views = reinterpret_cast<const VkImageFormatListCreateInfo*>(node);
+                            break;
+                        }
+                    }
                     const uint32_t viewCount = views ? views->viewFormatCount : 0;
                     const VkFormat* viewFormats = views ? views->pViewFormats : nullptr;
                     GFXSTREAM_INFO("CIB1-DIAG-CREATE: fmt=%u usage=0x%x flags=0x%x external=0x%x marker=%d "

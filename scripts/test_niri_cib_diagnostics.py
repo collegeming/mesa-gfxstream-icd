@@ -92,6 +92,8 @@ assert marker_start < marker_end
 assert not DRIVER.search(marker_block), 'query diagnostics must not add driver queries'
 assert 'const_cast' not in marker_block
 assert 'classicImageEnabled()' in marker_block
+assert 'vk_find_struct<VkImageFormatListCreateInfo>' not in query
+assert 'VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO' in query
 
 # (c) Create NativeBuffer marker and view-format list, plus absent-marker fields.
 create = block(decoder, '    VkResult on_vkCreateImage(', '    void destroyImageWithExclusiveInfo(')
@@ -110,6 +112,8 @@ assert not DRIVER.search(create_block), 'create diagnostics must not add driver 
 assert 'pCreateInfo->format =' not in create_block
 assert 'pCreateInfo->usage =' not in create_block
 assert 'pCreateInfo->flags =' not in create_block
+assert 'vk_find_struct<VkImageFormatListCreateInfo>' not in create
+assert 'VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO' in create
 
 # Publication wiring: diagnostics must be applied after the CIB core and packaged.
 assert workflow.index('patch_classic_image_bridge.py') < workflow.index('patch_niri_cib_diagnostics.py')
