@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <limits>
 namespace gfxstream { namespace host { namespace cib {
-constexpr uint32_t kVersion = 1;
-constexpr uint32_t kContract = 0x43494231;
+inline constexpr uint32_t kVersion = 1;
+inline constexpr uint32_t kContract = 0x43494231;
 constexpr uint64_t kConsumer = 0x4349423100000001ULL;
 constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
     VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
