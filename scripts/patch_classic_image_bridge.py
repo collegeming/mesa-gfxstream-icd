@@ -208,8 +208,7 @@ edit(d, '''        // Alias metadata lookup borrows existing backing; no dup/acq
                 return allocateClassicImageLocked(device, vk, pAllocateInfo, pMemory);
         }
         // Alias metadata lookup borrows existing backing; no dup/acquire/invalidation.''')
-edit(d, '''        VALIDATE_REQUIRED_HANDLE(memory);
-        VkResult result = vk->vkBindImageMemory(device, image, memory, memoryOffset);''', '''        {
+edit(d, '''        VkResult result = vk->vkBindImageMemory(device, image, memory, memoryOffset);''', '''        {
             std::lock_guard<std::mutex> lock(mMutex);
             auto* bridge = gfxstream::base::find(mImageInfo, image);
             auto* allocation = gfxstream::base::find(mMemoryInfo, memory);
@@ -222,7 +221,6 @@ edit(d, '''        VALIDATE_REQUIRED_HANDLE(memory);
                     return VK_ERROR_INVALID_EXTERNAL_HANDLE;
             }
         }
-        VALIDATE_REQUIRED_HANDLE(memory);
         VkResult result = vk->vkBindImageMemory(device, image, memory, memoryOffset);''')
 edit(d, '''        imageInfo->memory = memory;''', '''        imageInfo->memory = memory;
         if (imageInfo->classicImageResource) imageInfo->classicImageBound = true;''')
