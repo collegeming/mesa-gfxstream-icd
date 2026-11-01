@@ -1,0 +1,49 @@
+name: niri-classic-wrapper-cpu
+on:
+  push:
+    branches: [diagnostic/niri-classic-wrapper]
+    paths:
+      - scripts/native_pair_classic_exec.sh
+      - .github/workflows/niri-classic-wrapper.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wrapper-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify exact one-feature derivative and shell syntax
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 -I - <<'PY' | tee out/wrapper-contract-tests.txt
+          import hashlib
+          from pathlib import Path
+          original = Path('scripts/native_pair_map_debug_exec.sh').read_bytes()
+          candidate = Path('scripts/native_pair_classic_exec.sh').read_bytes()
+          assert hashlib.sha256(original).hexdigest() == '6d4765a3c3123a84fbedf18faa34b7c41d3e08ec7e16c53f4ce804fb3f9690ed'
+          old = b"VirtioGpuNext:enabled'"
+          assert original.count(old) == 1
+          assert candidate == original.replace(old, b"VirtioGpuNext:enabled,ClassicImageBridge:enabled'")
+          print('PASS: exact pinned wrapper plus one appended ClassicImageBridge feature; guards, preload, paths and log level unchanged')
+          PY
+          dash -n scripts/native_pair_classic_exec.sh
+          shellcheck --shell=sh scripts/native_pair_classic_exec.sh
+      - name: Run unchanged baseline wrapper CPU contract tests
+        run: |
+          set -euo pipefail
+          python3 -I tests/test_native_pair_map_debug_exec.py | tee out/inherited-wrapper-tests.txt
+      - name: Package immutable wrapper and provenance
+        run: |
+          set -euo pipefail
+          cp scripts/native_pair_classic_exec.sh out/
+          cp .github/workflows/niri-classic-wrapper.yml out/
+          printf '%s\n' "$GITHUB_SHA" > out/commit.txt
+          printf '%s\n' '580a9c90bd961e2fd5f6fb8bc408d472c787cbfe' > out/baseline-commit.txt
+          (cd out && sha256sum * > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: niri-classic-wrapper-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
