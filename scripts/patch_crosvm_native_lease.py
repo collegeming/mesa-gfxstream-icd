@@ -59,7 +59,10 @@ def main():
     ) -> RutabagaResult<Box<dyn RutabagaComponent>>''', '''        debug_handler: Option<RutabagaDebugHandler>,
         native_lease_offer: bool,
     ) -> RutabagaResult<Box<dyn RutabagaComponent>>''')
-    s = replace(s, '        // TODO(b/315870313): Add safety comment', '''        let mut native_contract = crate::native_lease::NativeLeaseContract::offer();
+    s = replace(s, '''        // TODO(b/315870313): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        unsafe {
+            ret_to_res(stream_renderer_init(''', '''        let mut native_contract = crate::native_lease::NativeLeaseContract::offer();
         if native_lease_offer {
             stream_renderer_params.push(stream_renderer_param {
                 key: crate::native_lease::NATIVE_LEASE_PARAM,
@@ -68,7 +71,10 @@ def main():
             });
         }
 
-        // TODO(b/315870313): Add safety comment''')
+        // TODO(b/315870313): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        unsafe {
+            ret_to_res(stream_renderer_init(''')
     s = replace(s, '        Ok(Box::new(Gfxstream {', '''        let native_lease_epoch = if native_lease_offer {
             native_contract.accepted_epoch()
         } else { None };
