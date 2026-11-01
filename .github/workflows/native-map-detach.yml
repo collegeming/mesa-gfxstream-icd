@@ -1,0 +1,61 @@
+name: Pinned crosvm native mapping detach
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/native-map-detach]
+    paths:
+      - scripts/patch_crosvm_native_detach.py
+      - scripts/blob_detach.rs
+      - scripts/native_detach_requester_tests.rs
+      - scripts/test_crosvm_native_detach.py
+      - .github/workflows/native-map-detach.yml
+permissions:
+  contents: read
+jobs:
+  production-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch audited production source and native dependency
+        run: |
+          git clone --no-checkout https://github.com/Droid-VM/crosvm.git "$RUNNER_TEMP/crosvm"
+          git -C "$RUNNER_TEMP/crosvm" checkout 849e05f12d5c8d4c36af8e15763986d242cd43b5
+          git clone https://github.com/google/minijail.git "$RUNNER_TEMP/minijail"
+          git -C "$RUNNER_TEMP/minijail" checkout 8787d1a4fdd7c64791607a1122d2408b3b35ade4
+          python3 -I scripts/patch_crosvm_native_detach.py "$RUNNER_TEMP/crosvm"
+          python3 -I scripts/test_crosvm_native_detach.py "$RUNNER_TEMP/crosvm"
+          git -C "$RUNNER_TEMP/crosvm" diff > "$RUNNER_TEMP/native-detach-production.diff"
+      - name: Install production native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev libclang-dev libwayland-dev wayland-protocols libdrm-dev libgbm-dev libegl1-mesa-dev libxkbcommon-dev protobuf-compiler libssl-dev pkg-config ninja-build
+          rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/crosvm/target
+          key: crosvm-native-detach-${{ runner.os }}-849e05f-v1
+      - name: Compile real production devices and run Rust detach tests
+        working-directory: ${{ runner.temp }}/crosvm
+        env:
+          CARGO_BUILD_JOBS: '4'
+        run: |
+          set -o pipefail
+          cargo +stable test -p devices --no-default-features --features gpu native_detach -- --nocapture 2>&1 | tee "$RUNNER_TEMP/native-detach-tests.log"
+      - name: Archive production source and evidence
+        if: always()
+        run: |
+          tar -C "$RUNNER_TEMP/crosvm" -czf "$RUNNER_TEMP/native-detach-source.tar.gz" devices/src/virtio/gpu/virtio_gpu.rs devices/src/virtio/gpu/blob_detach.rs devices/src/virtio/virtio_pci_device.rs devices/src/virtio/native_detach_requester_tests.rs
+          sha256sum "$RUNNER_TEMP/native-detach-source.tar.gz" > "$RUNNER_TEMP/native-detach-source.sha256"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crosvm-native-detach-production
+          path: |
+            ${{ runner.temp }}/native-detach-production.diff
+            ${{ runner.temp }}/native-detach-tests.log
+            ${{ runner.temp }}/native-detach-source.tar.gz
+            ${{ runner.temp }}/native-detach-source.sha256
