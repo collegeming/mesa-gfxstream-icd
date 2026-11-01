@@ -160,6 +160,12 @@ jobs:
             -Ivulkan-headers/include -Ici/scripts \
             ci/scripts/test_native_backing_lease.cpp -o "$RUNNER_TEMP/test-native-backing"
           "$RUNNER_TEMP/test-native-backing" | tee out/native-backing-tests.txt
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ivulkan-headers/include -Isource/common/base/include -Isource/host/common/include \
+            ci/scripts/test_native_backing_manager.cpp source/host/common/external_object_manager.cpp \
+            -o "$RUNNER_TEMP/test-native-manager"
+          "$RUNNER_TEMP/test-native-manager" | tee -a out/native-backing-tests.txt
           python3 -I ci/scripts/test_native_backing_integration.py source | tee -a out/native-backing-tests.txt
 
       - name: Fetch Android NDK r27c
@@ -276,7 +282,8 @@ jobs:
                   "remaining_blockers": ["Real paired VMM unregister acknowledgement, uncertain registration quarantine, retry/reset/drop policy", "Move entire native device child retirement off decoder command thread; current idle is outside mMutex but still synchronous", "Process/reset shutdown lifetime of global driver lock and Vulkan loader for asynchronous finalizers", "Runtime guest PFN, cache attributes and GPU coherency validation"],
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['native_backing_lease.h', 'patch_native_backing_lease.py',
-                                          'test_native_backing_lease.cpp', 'test_native_backing_integration.py',
+                                          'test_native_backing_lease.cpp', 'test_native_backing_manager.cpp',
+                                          'test_native_backing_integration.py',
                                           'native-backing-tests.txt']}
               },
               "staging_contract": {
