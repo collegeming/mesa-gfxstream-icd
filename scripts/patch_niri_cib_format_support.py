@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CIB1: add MUTABLE-only BGRA8/RGBA8 default support combos and a bounded support summary."""
+"""CIB1: MUTABLE-only BGRA8/RGBA8 support, plain-query fallback, bounded summary."""
 import argparse
 from pathlib import Path
 p = argparse.ArgumentParser(description=__doc__)
@@ -13,21 +13,79 @@ def edit(rel, old, new):
     path.write_text(text.replace(old, new))
 
 formats = 'host/vulkan/vk_format_support.cpp'
+# Keep the classic MUTABLE-only BGRA8 entry ahead of the EXTENDED_USAGE gralloc
+# entry so GetSupportedInfo selects the classic shape when the external query
+# rejects both. The real native query still decides whether it is supported.
 edit(formats, '''        {VK_FORMAT_B8G8R8A8_UNORM,
          VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},
-''', '''        {VK_FORMAT_B8G8R8A8_UNORM,
+''', '''        {VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},
+        {VK_FORMAT_B8G8R8A8_UNORM,
          VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},
-
-        // CIB1: classic guest BGRA8/RGBA8 color buffers are created with
-        // MUTABLE_FORMAT only. EXTENDED_USAGE is not required for that path and
-        // can make the native AHB query reject every BGRA8 combination. Keep the
-        // default EXTENDED entries above; the real native query below decides
-        // whether these entries are supported.
+''')
+# RGBA8 already has a supported EXTENDED entry first; keep that preference and
+# add the MUTABLE-only fallback after it.
+edit(formats, '''        {VK_FORMAT_R8G8B8A8_UNORM,
+         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},
+''', '''        {VK_FORMAT_R8G8B8A8_UNORM,
+         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT},
         {VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},
-        {VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT},
 ''')
 
 ops = 'host/vulkan/vk_common_operations.cpp'
+# A failed external-memory query must not hide a format the plain query and the
+# native create still accept. Do not claim external support for this entry:
+# ColorBuffer creation still appends the configured external pNext and the
+# driver's create remains authoritative.
+edit(ops, '''    if (res != VK_SUCCESS) {
+        if (res == VK_ERROR_FORMAT_NOT_SUPPORTED) {
+            GFXSTREAM_DEBUG("Not Supported: %s %s %s %s", string_VkFormat(info->format),
+                            string_VkImageType(info->type), string_VkImageTiling(info->tiling),
+                            string_VkImageUsageFlagBits((VkImageUsageFlagBits)info->usageFlags));
+
+            info->supported = false;
+            return true;
+        } else {''', '''    if (res != VK_SUCCESS) {
+        if (res == VK_ERROR_FORMAT_NOT_SUPPORTED) {
+            GFXSTREAM_DEBUG("Not Supported: %s %s %s %s", string_VkFormat(info->format),
+                            string_VkImageType(info->type), string_VkImageTiling(info->tiling),
+                            string_VkImageUsageFlagBits((VkImageUsageFlagBits)info->usageFlags));
+
+            VkImageFormatProperties plainProps{};
+            VkResult plainRes = vk->vkGetPhysicalDeviceImageFormatProperties(
+                physdev, info->format, info->type, info->tiling, info->usageFlags,
+                info->createFlags, &plainProps);
+            if (plainRes == VK_SUCCESS) {
+                info->supported = true;
+                info->supportsExternalMemory = false;
+                info->requiresDedicatedAllocation = false;
+                info->imageFormatProps2 = {
+                    VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+                    nullptr,
+                    plainProps,
+                };
+                info->extFormatProps = VkExternalImageFormatProperties{};
+                static std::atomic<uint32_t> cibFallbackLogs{0};
+                if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_NIRI_IMAGE_TRACE") == "1" &&
+                    cibFallbackLogs.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    GFXSTREAM_INFO("CIB1-DIAG-FMT-FALLBACK: fmt=%u tiling=%u usage=0x%x flags=0x%x "
+                                   "plain=success external=0",
+                                   (unsigned)info->format, (unsigned)info->tiling,
+                                   (unsigned)info->usageFlags, (unsigned)info->createFlags);
+                }
+                return true;
+            }
+            if (plainRes == VK_ERROR_FORMAT_NOT_SUPPORTED) {
+                info->supported = false;
+                return true;
+            }
+            GFXSTREAM_ERROR(
+                "vkGetPhysicalDeviceImageFormatProperties fallback failed with %s "
+                "for format 0x%x type 0x%x usage 0x%x flags 0x%x",
+                string_VkResult(plainRes), info->format, info->type, info->usageFlags,
+                info->createFlags);
+            return false;
+        } else {''')
+
 edit(ops, '''    // Collect image support info of the selected device
     for (size_t i = 0; i < emulation->mImageSupportInfo.mSupportInfos.size(); ++i) {
         emulation->populateImageFormatExternalMemorySupportInfo(ivk, emulation->mPhysicalDevice,
@@ -77,4 +135,4 @@ edit(ops, '''    // Collect image support info of the selected device
         }
     }
 ''')
-print('Added CIB1 MUTABLE-only BGRA8/RGBA8 default support combos and bounded support summary')
+print('Added CIB1 MUTABLE-only BGRA8/RGBA8 entries, plain-query fallback and bounded support summary')
