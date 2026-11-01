@@ -106,6 +106,13 @@ jobs:
           PY
           mkdir -p "$GITHUB_WORKSPACE/native-headers/sys"
           cp /usr/include/sys/capability.h "$GITHUB_WORKSPACE/native-headers/sys/"
+          python3 -I - <<'PY'
+          from pathlib import Path
+          p = Path('source/devices/src/virtio/rng.rs')
+          s = p.read_text()
+          assert s.count('rand::rng()') == 1
+          p.write_text(s.replace('rand::rng()', 'rand::thread_rng()'))
+          PY
           cd source
           cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
           cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-build.log
