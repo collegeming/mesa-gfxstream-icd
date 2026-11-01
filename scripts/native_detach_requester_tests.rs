@@ -12,7 +12,7 @@ fn requester() -> (VmRequester, Tube) {
 #[test]
 fn native_detach_requester_rejection_then_ack_preserves_id() {
     let (mut requester, server) = requester();
-    let id = VmMemoryRegionId(vm_memory::GuestAddress(0x10000));
+    let id = VmMemoryRegionId::from_guest_addr(vm_memory::GuestAddress(0x10000));
     requester.mappings.insert(64, id);
     let worker = std::thread::spawn(move || {
         assert!(matches!(server.recv::<VmMemoryRequest>().unwrap(), VmMemoryRequest::UnregisterMemory(_)));
@@ -31,7 +31,7 @@ fn native_detach_requester_rejection_then_ack_preserves_id() {
 #[test]
 fn native_detach_requester_lost_ack_quarantines_tube() {
     let (mut requester, server) = requester();
-    let id = VmMemoryRegionId(vm_memory::GuestAddress(0x10000));
+    let id = VmMemoryRegionId::from_guest_addr(vm_memory::GuestAddress(0x10000));
     requester.mappings.insert(64, id);
     let worker = std::thread::spawn(move || {
         server.recv::<VmMemoryRequest>().unwrap();
@@ -62,7 +62,7 @@ fn native_detach_requester_register_reply_loss_blocks_remap() {
 #[test]
 fn native_detach_requester_duplicate_offset_never_sends() {
     let (mut requester, _server) = requester();
-    requester.mappings.insert(64, VmMemoryRegionId(vm_memory::GuestAddress(0x10000)));
+    requester.mappings.insert(64, VmMemoryRegionId::from_guest_addr(vm_memory::GuestAddress(0x10000)));
     assert!(requester.add_mapping_blob(VmMemorySource::ExternalMapping { ptr: 0, size: 4096 },
         64, Protection::read_write(), MemCacheType::CacheCoherent, VmAccept::Sync).is_err());
     assert!(!requester.blob_transport_quarantined);

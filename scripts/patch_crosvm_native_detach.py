@@ -20,6 +20,18 @@ def main():
     root = a.source.resolve()
     if subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
         raise RuntimeError('unaudited crosvm revision')
+    # Pinned fork has two pre-existing Cargo defects: rand 0.8 API mismatch,
+    # and block test literals predating queue_size. Keep fixes narrow and explicit.
+    rng = root / 'devices/src/virtio/rng.rs'
+    rng.write_text(replace(rng.read_text(), 'rand::rng()', 'rand::thread_rng()'))
+    block = root / 'devices/src/virtio/block/mod.rs'
+    bs = block.read_text()
+    before, tests = bs.split('#[cfg(test)]\nmod tests {', 1)
+    import re
+    tests, count = re.subn(r'(?m)^([ \t]*)packed_queue: (false|true),\n([ \t]*)bootindex:', r'\1packed_queue: \2,\n\1queue_size: None,\n\3bootindex:', tests)
+    if count != 24:
+        raise RuntimeError(f'baseline block-test literal count changed: {count}')
+    block.write_text(before + '#[cfg(test)]\nmod tests {' + tests)
     gpu = root / 'devices/src/virtio/gpu/virtio_gpu.rs'
     s = gpu.read_text()
     s = replace(s, 'struct VirtioGpuResource {', '#[path = "blob_detach.rs"]\nmod blob_detach;\n\nstruct VirtioGpuResource {')
@@ -137,6 +149,7 @@ impl Drop for VirtioGpu {
         if self.blob_transport_quarantined || self.mappings.contains_key(&offset) {
             return Err(anyhow!("blob mapping duplicate or transport quarantined"));
         }
+        self.blob_transport_quarantined = true;
         if !self.prepared {''')
     s = replace(s, '''        let (id, gunyah_handle) = self
             .vm_memory_client''', '''        // Quarantine before the request: no error, including a lost reply, proves absence.
