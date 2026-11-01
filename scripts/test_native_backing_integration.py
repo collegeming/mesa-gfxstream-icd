@@ -73,5 +73,7 @@ print('PASS: production owner propagation, device/instance finalizers, all-gener
 assert 'new InstanceObjects::DeviceObjects(std::move(deviceObjects))' in d
 assert 'std::lock_guard<std::recursive_mutex> resourceLock(mResourceOperations);' in frontend
 assert 'if (mNativeRetiring) return -EBUSY;' in frontend
+assert 'if (native::Session::get().snapshotBlocked()) return -EBUSY;' in frontend
+assert 'return mNativeNegotiated || mAllocations.load() || !Reclaimer::get().idle();' in helper
 assert '} // release resource operation lock before context cleanup/decoder waits' in frontend
 print('BOUNDARY: exact paired init contract and native owner epoch required; old VMM rejected; failed GPU idle quarantines native children; no guest/PFN/cache/GPU validation')

@@ -38,12 +38,15 @@ int main() {
     { Initialization init; assert(init.started()); Offer offer; assert(parse(offer, d)); init.success(offer); oldEpoch = d.epoch; }
     assert(d.accepted == kDetachMask && d.hostSupported == kDetachMask && oldEpoch);
     assert(Session::get().ready(oldEpoch));
+    assert(Session::get().snapshotBlocked()); // even with no allocations/resources
     { Initialization duplicateInit; assert(!duplicateInit.started()); }
     {
         std::lock_guard<std::mutex> lock(Session::get().lifecycle);
         Session::get().revoke();
         assert(!Session::get().ready(oldEpoch));
+        assert(Session::get().snapshotBlocked()); // revoke does not make native pointers serializable
         Session::get().stopped();
+        assert(!Session::get().snapshotBlocked());
     }
     d = descriptor();
     { Initialization init; assert(init.started()); Offer offer; assert(parse(offer, d)); init.success(offer); }
