@@ -8,9 +8,12 @@ on:
       - scripts/blob_detach.rs
       - scripts/native_detach_requester_tests.rs
       - scripts/test_crosvm_native_detach.py
+      - scripts/patch_crosvm_native_lease.py
+      - scripts/native_lease.rs
       - .github/workflows/native-map-detach.yml
 permissions:
   contents: read
+  actions: read
 jobs:
   production-linux:
     runs-on: ubuntu-24.04
@@ -24,8 +27,20 @@ jobs:
           git clone https://github.com/google/minijail.git "$RUNNER_TEMP/minijail"
           git -C "$RUNNER_TEMP/minijail" checkout 8787d1a4fdd7c64791607a1122d2408b3b35ade4
           python3 -I scripts/patch_crosvm_native_detach.py "$RUNNER_TEMP/crosvm"
+          python3 -I scripts/patch_crosvm_native_lease.py "$RUNNER_TEMP/crosvm"
           python3 -I scripts/test_crosvm_native_detach.py "$RUNNER_TEMP/crosvm"
           git -C "$RUNNER_TEMP/crosvm" diff > "$RUNNER_TEMP/native-detach-production.diff"
+      - name: Fetch genuine Android renderer artifact for metadata-only feature check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-renderer"
+          gh api repos/collegeming/mesa-gfxstream-icd/actions/artifacts/13076487465/zip > "$RUNNER_TEMP/native-renderer.zip"
+          printf '%s  %s\n' dff46b9a6e1f5651ae40b86b052aacc9029bb9ef30ed93bd8c62b9a45ffbbd05 "$RUNNER_TEMP/native-renderer.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/native-renderer.zip" -d "$RUNNER_TEMP/native-renderer"
+          find "$RUNNER_TEMP/native-renderer" -type f -name 'libgfxstream_backend.so' -print
+          # cargo check does not link this Android ELF into a Linux executable.
+          # The file is genuine provenance, not a stub or an Android executable claim.
       - name: Install production native build dependencies
         run: |
           sudo apt-get update
@@ -46,10 +61,14 @@ jobs:
           set -o pipefail
           cargo +stable test -p devices --no-default-features --features gpu native_detach -- --nocapture 2>&1 | tee "$RUNNER_TEMP/native-detach-tests.log"
           cargo +stable check -p crosvm --no-default-features --features gpu 2>&1 | tee "$RUNNER_TEMP/native-detach-main-check.log"
+          cargo +stable test -p rutabaga_gfx --no-default-features native_lease -- --nocapture 2>&1 | tee "$RUNNER_TEMP/native-lease-tests.log"
+          export GFXSTREAM_PATH="$(dirname "$(find "$RUNNER_TEMP/native-renderer" -name libgfxstream_backend.so -type f -print -quit)")"
+          test -f "$GFXSTREAM_PATH/libgfxstream_backend.so"
+          cargo +stable check -p crosvm --no-default-features --features gpu,gfxstream 2>&1 | tee "$RUNNER_TEMP/native-lease-gfxstream-check.log"
       - name: Archive production source and evidence
         if: always()
         run: |
-          tar -C "$RUNNER_TEMP/crosvm" -czf "$RUNNER_TEMP/native-detach-source.tar.gz" devices/src/virtio/gpu/virtio_gpu.rs devices/src/virtio/gpu/blob_detach.rs devices/src/virtio/gpu/mod.rs devices/src/virtio/virtio_pci_device.rs devices/src/virtio/native_detach_requester_tests.rs src/crosvm/sys/linux.rs devices/src/virtio/rng.rs devices/src/virtio/block/mod.rs
+          tar -C "$RUNNER_TEMP/crosvm" -czf "$RUNNER_TEMP/native-detach-source.tar.gz" devices/src/virtio/gpu/virtio_gpu.rs devices/src/virtio/gpu/blob_detach.rs devices/src/virtio/gpu/mod.rs devices/src/virtio/virtio_pci_device.rs devices/src/virtio/native_detach_requester_tests.rs src/crosvm/sys/linux.rs src/crosvm/sys/linux/gpu.rs src/crosvm/sys/linux/device_helpers.rs src/main.rs devices/src/virtio/rng.rs devices/src/virtio/block/mod.rs x86_64/src/lib.rs devices/src/virtio/virtio_device.rs rutabaga_gfx/src/lib.rs rutabaga_gfx/src/rutabaga_core.rs rutabaga_gfx/src/gfxstream.rs rutabaga_gfx/src/native_lease.rs
           sha256sum "$RUNNER_TEMP/native-detach-source.tar.gz" > "$RUNNER_TEMP/native-detach-source.sha256"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -59,5 +78,7 @@ jobs:
             ${{ runner.temp }}/native-detach-production.diff
             ${{ runner.temp }}/native-detach-tests.log
             ${{ runner.temp }}/native-detach-main-check.log
+            ${{ runner.temp }}/native-lease-tests.log
+            ${{ runner.temp }}/native-lease-gfxstream-check.log
             ${{ runner.temp }}/native-detach-source.tar.gz
             ${{ runner.temp }}/native-detach-source.sha256

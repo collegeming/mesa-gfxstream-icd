@@ -34,4 +34,18 @@ assert 'impl Drop for VirtioGpu' in gpu and 'ManuallyDrop::drop(&mut self.rutaba
 remove = pci.split('    fn remove_mapping(&mut self, offset: u64)', 1)[1].split('    fn as_raw_descriptor', 1)[0]
 assert remove.index('unregister_memory(id)') < remove.index('self.mappings.remove(&offset)')
 assert 'ApiClientError::RequestFailed' in remove
+assert map_blob.index('raw_mapping_allowed(') < map_blob.index('self.rutabaga.map(resource_id)')
+assert 'native_host3d_resource(resource_id)' in map_blob
+assert 'mapper.native_detach_supported()' in map_blob
+main_gpu = (a.source / 'src/crosvm/sys/linux/gpu.rs').read_text()
+assert main_gpu.index('let native_lease_offer =') < main_gpu.index('dev.set_native_lease_offer(native_lease_offer)')
+assert 'cfg.vfio.is_empty() && cfg.coiommu_param.is_none()' in main_gpu
+assert '!is_sandboxed && !gpu_params.fixed_blob_mapping && !gpu_params.udmabuf' in main_gpu
+assert 'cfg.hypervisor = Some(hypervisor.clone())' in linux
+core = (a.source / 'rutabaga_gfx/src/rutabaga_core.rs').read_text()
+gfx = (a.source / 'rutabaga_gfx/src/gfxstream.rs').read_text()
+assert 'native_lease_offer: false' in core
+assert 'self.native_lease_offer,' in core
+assert gfx.index('if native_lease_offer {') < gfx.index('ret_to_res(stream_renderer_init(') < gfx.index('native_contract.accepted_epoch()')
+assert 'fn native_lease_epoch(&self) -> Option<u64> { self.native_lease_epoch }' in gfx
 print('Pinned production source integration checks passed')

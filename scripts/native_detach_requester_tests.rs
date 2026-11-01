@@ -10,6 +10,19 @@ fn requester() -> (VmRequester, Tube) {
 }
 
 #[test]
+fn native_detach_requester_capability_requires_concrete_dynamic_wiring() {
+    let (mut requester, _server) = requester();
+    assert!(!requester.native_detach_supported());
+    requester.native_detach_wiring = true;
+    assert!(requester.native_detach_supported());
+    requester.blob_transport_quarantined = true;
+    assert!(!requester.native_detach_supported());
+    requester.blob_transport_quarantined = false;
+    requester.prepare_type = SharedMemoryPrepareType::SingleMappingOnFirst(MemCacheType::CacheCoherent);
+    assert!(!requester.native_detach_supported());
+}
+
+#[test]
 fn native_detach_requester_rejection_then_ack_preserves_id() {
     let (mut requester, server) = requester();
     let id = VmMemoryRegionId::from_guest_addr(vm_memory::GuestAddress(0x10000));
