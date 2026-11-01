@@ -18,11 +18,20 @@ class Reclaimer {
 public:
     static Reclaimer& get() { static auto* q = new Reclaimer; return *q; }
     void post(std::function<void()> work) {
-        { std::lock_guard<std::mutex> lock(mMutex); mWork.push(std::move(work)); }
+        { std::lock_guard<std::mutex> lock(mMutex); ++mPending; mWork.push(std::move(work)); }
         mCv.notify_one();
     }
+    // Only after producers/decoder threads have stopped, never under decoder or
+    // manager locks. Includes child finalizers enqueued while parents retire.
+    void drain() {
+        if (onWorker()) std::terminate(); // self-drain cannot make progress
+        std::unique_lock<std::mutex> lock(mMutex);
+        mIdle.wait(lock, [this] { return mPending == 0; });
+    }
 private:
+    static bool& onWorker() { static thread_local bool value = false; return value; }
     Reclaimer() { std::thread([this] {
+        onWorker() = true;
         for (;;) {
             std::function<void()> work;
             {
@@ -31,10 +40,15 @@ private:
                 work = std::move(mWork.front()); mWork.pop();
             }
             work();
+            work = {}; // release captured parents BEFORE declaring queue idle
+            { std::lock_guard<std::mutex> lock(mMutex); --mPending; }
+            mIdle.notify_all();
         }
     }).detach(); }
     std::mutex mMutex;
     std::condition_variable mCv;
+    std::condition_variable mIdle;
+    uint64_t mPending = 0;
     std::queue<std::function<void()>> mWork;
 };
 
@@ -113,6 +127,14 @@ inline bool nativeBlob(bool hasBlob, uint32_t memory, uint32_t flags) {
 
 class MapState {
 public:
+    MapState() = default;
+    MapState(const MapState&) = delete;
+    MapState& operator=(const MapState&) = delete;
+    MapState(MapState&& other) noexcept : mActive(std::exchange(other.mActive, false)) {}
+    MapState& operator=(MapState&& other) noexcept {
+        if (mActive) std::terminate(); // destination must quarantine before replacement
+        mActive = std::exchange(other.mActive, false); return *this;
+    }
     bool map(const Allocation& owner, uint64_t requested, uint64_t page) {
         if (mActive || !validExtent(owner, requested, page)) return false;
         mActive = true; return true;
@@ -122,4 +144,14 @@ public:
 private:
     bool mActive = false;
 };
+// Forced renderer drop is not evidence of VMM detach. Preserve uncertain live
+// backing for process lifetime; only a future proven detach token may reclaim it.
+inline void quarantine(std::shared_ptr<Allocation> owner) {
+    if (!owner) return;
+    struct Held { std::shared_ptr<Allocation> owner; Held* next; };
+    static std::mutex* mutex = new std::mutex;
+    static Held* head = nullptr;
+    std::lock_guard<std::mutex> lock(*mutex);
+    head = new Held{std::move(owner), head};
+}
 }}} // namespace gfxstream::host::native
