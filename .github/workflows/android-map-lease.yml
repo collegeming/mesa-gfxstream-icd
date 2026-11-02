@@ -286,6 +286,8 @@ jobs:
           pci = Path('source/devices/src/virtio/virtio_pci_device.rs').read_text()
           assert pci.count('CIB1-DIAG-CROSVM-MAPBLOB') == 1
           assert pci.count('replaces mapping id') == 1
+          vmc = Path('source/vm_control/src/lib.rs').read_text()
+          assert vmc.count('CIB1-DIAG-CROSVM-MAPREGION') == 2
           PY
           git -C source diff --check
           cd source

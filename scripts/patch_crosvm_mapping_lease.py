@@ -105,6 +105,49 @@ def patch(root):
     p.write_text(s, encoding='utf-8')
     changes[str(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
 
+    # Say which guest address each blob actually lands on, and whether the mapping call accepted
+    # it: the ring that never reaches the host needs its BAR offset checked against this line.
+    vmc = root / 'vm_control/src/lib.rs'
+    s = vmc.read_text(encoding='utf-8')
+    old_map = '''    if let Err(err) = vm.add_fd_mapping(
+        *slot,
+        *dest_offset as usize,
+        size,
+        &descriptor,
+        file_offset,
+        *prot,
+    ) {
+        return Some(VmMemoryResponse::Err(err));
+    }
+'''
+    new_map = '''    base::warn!(
+        "CIB1-DIAG-CROSVM-MAPREGION: guest={:#x} offset={:#x} size={:#x} file_offset={:#x}",
+        guest_address.0 + dest_offset,
+        dest_offset,
+        size,
+        file_offset
+    );
+    if let Err(err) = vm.add_fd_mapping(
+        *slot,
+        *dest_offset as usize,
+        size,
+        &descriptor,
+        file_offset,
+        *prot,
+    ) {
+        base::error!(
+            "CIB1-DIAG-CROSVM-MAPREGION: add_fd_mapping guest={:#x} size={:#x} failed: {:?}",
+            guest_address.0 + dest_offset,
+            size,
+            err
+        );
+        return Some(VmMemoryResponse::Err(err));
+    }
+'''
+    s = replace(s, old_map, new_map)
+    vmc.write_text(s, encoding='utf-8')
+    changes[str(vmc)] = hashlib.sha256(vmc.read_bytes()).hexdigest()
+
     # Mapping the same BAR offset again means the previous owner's node was freed but its UNMAP
     # has not been processed. Leaving the stale registration in place makes the new blob share
     # or inherit a backing whose owner is gone; the guest can end up reading an aperture that
