@@ -154,6 +154,8 @@ static VkResult create_image(const struct create_variant *v, VkImage *image) {
     return r;
 }
 
+static void render_check(VkImage image, const char *tag);
+
 static VkResult import_image_type(int fd, VkImage image, const char *tag, int index) {
     VkMemoryRequirements req = {0};
     vkGetImageMemoryRequirements(g_device, image, &req);
