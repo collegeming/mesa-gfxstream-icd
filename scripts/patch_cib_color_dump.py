@@ -43,7 +43,11 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                 const long intervalMs = strtol(intervalEnv, nullptr, 0);
                 if (intervalMs <= 0) return;
                 std::thread([this, intervalMs]() {
-                    while (true) {
+                    // One delayed pass only: the readback submits work on the same
+                    // physical queue as the compositor, so a periodic dump can stall
+                    // the guest. A single pass after the first frames is the
+                    // low-interference way to capture ground truth.
+                    {
                         std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
                         std::vector<uint32_t> resources;
                         {
