@@ -21,6 +21,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#ifndef VK_USE_PLATFORM_ANDROID_KHR
+#define VK_USE_PLATFORM_ANDROID_KHR 1
+#endif
 #include <android/hardware_buffer.h>
 #include <vulkan/vulkan.h>
 
