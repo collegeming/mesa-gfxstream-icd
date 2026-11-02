@@ -77,11 +77,11 @@ void hostAllocDumpRegister(void* ptr, size_t size) {
 }
 }  // namespace
 '''
-anchor = 'VkResult VkDecoderGlobalState::on_vkCreateImage('
+anchor = 'class VkDecoderGlobalState::Impl {'
 if anchor not in text:
-    raise SystemExit('missing on_vkCreateImage anchor')
-# Insert the helper before the first anonymous namespace end is impractical; put it
-# right before VkDecoderGlobalState::on_vkCreateImage definition.
+    raise SystemExit('missing Impl class anchor')
+# Insert at file scope before the Impl class so both Impl and the public
+# VkDecoderGlobalState methods can call the register helper.
 if '#include <utility>' not in text:
     text = text.replace('#include <vector>', '#include <utility>\n#include <vector>', 1)
 idx = text.index(anchor)
