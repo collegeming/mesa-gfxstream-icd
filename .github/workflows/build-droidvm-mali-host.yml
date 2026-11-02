@@ -32,6 +32,7 @@ on:
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
+      - 'scripts/*copy_diag*'
 
 permissions:
   contents: read
@@ -291,7 +292,9 @@ jobs:
           grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
           python3 -I ci/scripts/patch_cib_color_dump.py source
           grep -q 'GFXSTREAM_CIB_DUMP_REQUEST' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_systemblob_host_pointer_type.py ci/scripts/patch_buffer_host_pointer.py ci/scripts/patch_cib_color_dump.py out/
+          python3 -I ci/scripts/patch_copy_diag.py source
+          grep -q 'COPY-IMG2BUF' source/host/vulkan/vk_decoder_global_state.cpp
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_systemblob_host_pointer_type.py ci/scripts/patch_buffer_host_pointer.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
