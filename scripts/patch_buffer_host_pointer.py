@@ -139,26 +139,34 @@ NEW = '''        void* hostAllocation = nullptr;
             // mapping with VK_EXT_external_memory_host. The driver accepts host
             // pointer memory for an external VkBuffer even though the type is outside
             // the buffer's advertised memoryTypeBits (measured on Mali).
+            // One trailing guard page-range filled with 0xA5 catches writes past the
+            // buffer without crashing the GPU process. The guest blob still maps the
+            // buffer at memfd offset 0 with the real size; the guard is host-only.
+            const size_t kGuardBytes = 1024 * 1024;
+            const size_t memfdSize = (size_t)alignedSize + kGuardBytes;
             int memfd = memfd_create("gfxstream-buffer-hostptr", MFD_CLOEXEC);
-            if (memfd < 0 || ftruncate(memfd, (off_t)alignedSize) != 0) {
+            if (memfd < 0 || ftruncate(memfd, (off_t)memfdSize) != 0) {
                 if (memfd >= 0) close(memfd);
                 GFXSTREAM_ERROR("%s: memfd for buffer host memory failed", __func__);
                 return false;
             }
             hostAllocation =
-                mmap(nullptr, alignedSize, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
+                mmap(nullptr, memfdSize, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
             if (hostAllocation == MAP_FAILED) {
                 close(memfd);
                 GFXSTREAM_ERROR("%s: mmap for buffer host memory failed", __func__);
                 return false;
             }
+            memset(static_cast<char*>(hostAllocation) + alignedSize, 0xA5, kGuardBytes);
             info->handleInfo = ExternalHandleInfo{
                 .handle = static_cast<ExternalHandleType>(memfd),
                 .streamHandleType = STREAM_HANDLE_TYPE_MEM_SHM,
             };
             info->hostAllocationMapped = true;
-            GFXSTREAM_WARNING("BUF-HOSTPTR: memfd=%d size=%llu fd-map=%p", memfd,
-                              (unsigned long long)alignedSize, hostAllocation);
+            info->hostAllocationMappedSize = memfdSize;
+            GFXSTREAM_WARNING("BUF-HOSTPTR: memfd=%d size=%llu guard=%llu map=%p", memfd,
+                              (unsigned long long)alignedSize,
+                              (unsigned long long)kGuardBytes, hostAllocation);
         } else {
 #ifdef _WIN32
             hostAllocation = _aligned_malloc(alignedSize, alignment);
@@ -216,7 +224,27 @@ OLD = '''    if (info->hostAllocationPtr) {
 NEW = '''    if (info->hostAllocationPtr) {
         if (info->hostAllocationMapped) {
 #if !defined(_WIN32)
-            munmap(info->hostAllocationPtr, info->size);
+            const char* guard =
+                static_cast<const char*>(info->hostAllocationPtr) + info->size;
+            const size_t guardBytes = info->hostAllocationMappedSize > info->size
+                                          ? info->hostAllocationMappedSize - info->size
+                                          : 0;
+            size_t first = guardBytes;
+            for (size_t gi = 0; gi < guardBytes; gi++) {
+                if (static_cast<unsigned char>(guard[gi]) != 0xA5) {
+                    first = gi;
+                    break;
+                }
+            }
+            if (first != guardBytes) {
+                GFXSTREAM_ERROR(
+                    "BUF-CANARY: OOB WRITE past buffer: first=%zu guard=%zu size=%llu",
+                    first, guardBytes, (unsigned long long)info->size);
+            } else if (guardBytes) {
+                GFXSTREAM_WARNING("BUF-CANARY: guard intact guard=%zu size=%llu", guardBytes,
+                                  (unsigned long long)info->size);
+            }
+            munmap(info->hostAllocationPtr, info->hostAllocationMappedSize);
 #endif
         } else {
 #ifdef _WIN32
@@ -304,6 +332,14 @@ OLD = '''            if (opaqueFd && m_vkEmulation->supportsExternalMemoryImport
 NEW = '''            if (opaqueFd) {
                 if (void* bufferHostPtr =
                         m_vkEmulation->getBufferHostPointerAny(importBufferInfoPtr->buffer)) {
+                    static std::atomic<unsigned> sBufImportLogs{0};
+                    if (sBufImportLogs.fetch_add(1, std::memory_order_relaxed) < 32) {
+                        GFXSTREAM_WARNING(
+                            "BUF-IMPORT: buffer=%u hostptr=%p size=%llu type=%u",
+                            importBufferInfoPtr->buffer, bufferHostPtr,
+                            (unsigned long long)localAllocInfo.allocationSize,
+                            localAllocInfo.memoryTypeIndex);
+                    }
                     importHostInfo.pHostPointer = bufferHostPtr;
                     vk_append_struct(&structChainIter, &importHostInfo);
                     opaqueFd = false;
