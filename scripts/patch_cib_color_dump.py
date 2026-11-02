@@ -42,6 +42,7 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                 if (!requestEnv || !*requestEnv) return;
                 const std::string requestPath(requestEnv);
                 std::thread([this, requestPath]() {
+                  for (int round = 0; round < 20; round++) {
                     bool requested = false;
                     for (int i = 0; i < 600; i++) {
                         if (access(requestPath.c_str(), F_OK) == 0) {
@@ -51,6 +52,7 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                         std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     }
                     if (!requested) return;
+                    GFXSTREAM_WARNING("CIB-DUMP: round %d requested", round);
                     std::vector<uint32_t> resources;
                     {
                         std::lock_guard<std::mutex> lock(mMutex);
@@ -78,7 +80,13 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                             close(fd);
                         }
                     }
-                    rename(requestPath.c_str(), "/data/local/tmp/cib-dump-done");
+                    GFXSTREAM_WARNING("CIB-DUMP: round %d dumped %zu ColorBuffer(s)",
+                                      round, resources.size());
+                    const char* donePath = "/data/local/tmp/cib-dump-done";
+                    rename(requestPath.c_str(), donePath);
+                    unlink(donePath);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                  }
                 }).detach();
             });
         }
