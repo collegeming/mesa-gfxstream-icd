@@ -474,6 +474,19 @@ static void ahb_buffer_test(void) {
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT},
     };
     for (unsigned u = 0; u < sizeof(kUsages) / sizeof(kUsages[0]); u++) {
+    VkPhysicalDeviceExternalBufferInfo extBufInfo = {0};
+    extBufInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO;
+    extBufInfo.flags = 0;
+    extBufInfo.usage = kUsages[u].usage;
+    extBufInfo.handleType =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    VkExternalBufferProperties extBufProps = {0};
+    extBufProps.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES;
+    vkGetPhysicalDeviceExternalBufferProperties(g_phys, &extBufInfo, &extBufProps);
+    P("PROBE-AHB-BUF-EXTPROPS %s features=0x%x exportFromImported=0x%x compatible=0x%x",
+      kUsages[u].tag, extBufProps.externalMemoryProperties.externalMemoryFeatures,
+      extBufProps.externalMemoryProperties.exportFromImportedHandleTypes,
+      extBufProps.externalMemoryProperties.compatibleHandleTypes);
     VkBufferCreateInfo bci = {0};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.pNext = &ext;
