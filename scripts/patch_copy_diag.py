@@ -65,5 +65,73 @@ if text.count(OLD) != 1:
     raise SystemExit(f'expected one buf2img anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
 
+
+OLD = '''        std::lock_guard<std::mutex> lock(mMutex);
+        auto* imageInfo = gfxstream::base::find(mImageInfo, pCopyImageToBufferInfo->srcImage);
+        auto* bufferInfo = gfxstream::base::find(mBufferInfo, pCopyImageToBufferInfo->dstBuffer);
+        if (!imageInfo || !bufferInfo) return;
+        if (!imageInfo->compressInfo) {
+            vk->vkCmdCopyImageToBuffer2(commandBuffer, pCopyImageToBufferInfo);'''
+NEW = '''        std::lock_guard<std::mutex> lock(mMutex);
+        {
+            static std::atomic<unsigned> sCopyImg2Buf2{0};
+            if (sCopyImg2Buf2.fetch_add(1, std::memory_order_relaxed) < 48 &&
+                pCopyImageToBufferInfo->regionCount) {
+                const VkBufferImageCopy2& r0 = pCopyImageToBufferInfo->pRegions[0];
+                GFXSTREAM_WARNING(
+                    "COPY-IMG2BUF2: image=%p layout=%d buffer=%p regions=%u bufOff=%llu "
+                    "rowLen=%u imgH=%u extent=%ux%ux%u imgOff=%d,%d,%d",
+                    (void*)pCopyImageToBufferInfo->srcImage,
+                    (int)pCopyImageToBufferInfo->srcImageLayout,
+                    (void*)pCopyImageToBufferInfo->dstBuffer,
+                    pCopyImageToBufferInfo->regionCount,
+                    (unsigned long long)r0.bufferOffset, r0.bufferRowLength,
+                    r0.bufferImageHeight, r0.imageExtent.width, r0.imageExtent.height,
+                    r0.imageExtent.depth, r0.imageOffset.x, r0.imageOffset.y,
+                    r0.imageOffset.z);
+            }
+        }
+        auto* imageInfo = gfxstream::base::find(mImageInfo, pCopyImageToBufferInfo->srcImage);
+        auto* bufferInfo = gfxstream::base::find(mBufferInfo, pCopyImageToBufferInfo->dstBuffer);
+        if (!imageInfo || !bufferInfo) return;
+        if (!imageInfo->compressInfo) {
+            vk->vkCmdCopyImageToBuffer2(commandBuffer, pCopyImageToBufferInfo);'''
+if text.count(OLD) != 1:
+    raise SystemExit(f'expected one img2buf2 anchor, found {text.count(OLD)}')
+text = text.replace(OLD, NEW)
+
+OLD = '''        std::lock_guard<std::mutex> lock(mMutex);
+        auto* imageInfo = gfxstream::base::find(mImageInfo, pCopyImageToBufferInfo->srcImage);
+        auto* bufferInfo = gfxstream::base::find(mBufferInfo, pCopyImageToBufferInfo->dstBuffer);
+        if (!imageInfo || !bufferInfo) return;
+        if (!imageInfo->compressInfo) {
+            vk->vkCmdCopyImageToBuffer2KHR(commandBuffer, pCopyImageToBufferInfo);'''
+NEW = '''        std::lock_guard<std::mutex> lock(mMutex);
+        {
+            static std::atomic<unsigned> sCopyImg2Buf2Khr{0};
+            if (sCopyImg2Buf2Khr.fetch_add(1, std::memory_order_relaxed) < 48 &&
+                pCopyImageToBufferInfo->regionCount) {
+                const VkBufferImageCopy2KHR& r0 = pCopyImageToBufferInfo->pRegions[0];
+                GFXSTREAM_WARNING(
+                    "COPY-IMG2BUF2KHR: image=%p layout=%d buffer=%p regions=%u bufOff=%llu "
+                    "rowLen=%u imgH=%u extent=%ux%ux%u imgOff=%d,%d,%d",
+                    (void*)pCopyImageToBufferInfo->srcImage,
+                    (int)pCopyImageToBufferInfo->srcImageLayout,
+                    (void*)pCopyImageToBufferInfo->dstBuffer,
+                    pCopyImageToBufferInfo->regionCount,
+                    (unsigned long long)r0.bufferOffset, r0.bufferRowLength,
+                    r0.bufferImageHeight, r0.imageExtent.width, r0.imageExtent.height,
+                    r0.imageExtent.depth, r0.imageOffset.x, r0.imageOffset.y,
+                    r0.imageOffset.z);
+            }
+        }
+        auto* imageInfo = gfxstream::base::find(mImageInfo, pCopyImageToBufferInfo->srcImage);
+        auto* bufferInfo = gfxstream::base::find(mBufferInfo, pCopyImageToBufferInfo->dstBuffer);
+        if (!imageInfo || !bufferInfo) return;
+        if (!imageInfo->compressInfo) {
+            vk->vkCmdCopyImageToBuffer2KHR(commandBuffer, pCopyImageToBufferInfo);'''
+if text.count(OLD) != 1:
+    raise SystemExit(f'expected one img2buf2khr anchor, found {text.count(OLD)}')
+text = text.replace(OLD, NEW)
 d.write_text(text, encoding='utf-8', newline='')
 print('copy parameter diagnostics patched')
