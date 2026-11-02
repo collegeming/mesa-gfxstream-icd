@@ -262,7 +262,27 @@ if text.count(OLD) != 1:
 text = text.replace(OLD, NEW)
 cpp.write_text(text, encoding='utf-8', newline='')
 
-# 11) Guest buffer import: prefer the recorded host pointer over any fd/AHB handle.
+# 11) Enable VK_EXT_external_memory_host on the emulation device. Without it the
+#     dispatch entry for vkGetMemoryHostPointerPropertiesEXT is null (observed as a
+#     pc=0 crash inside allocExternalMemory) and host-pointer imports are illegal.
+text = cpp.read_text(encoding='utf-8')
+OLD = '''#if defined(__linux__)
+    if (emulation->mDeviceInfo.supportsDmaBuf) {
+        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    }
+#endif
+'''
+NEW = OLD + '''
+    if (emulation->mDeviceInfo.supportsExternalMemoryHostProps) {
+        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    }
+'''
+if text.count(OLD) != 1:
+    raise SystemExit(f'expected one device extension anchor, found {text.count(OLD)}')
+text = text.replace(OLD, NEW)
+cpp.write_text(text, encoding='utf-8', newline='')
+
+# 12) Guest buffer import: prefer the recorded host pointer over any fd/AHB handle.
 d = root / 'host/vulkan/vk_decoder_global_state.cpp'
 text = d.read_text(encoding='utf-8')
 OLD = '''            if (opaqueFd && m_vkEmulation->supportsExternalMemoryImport()) {
