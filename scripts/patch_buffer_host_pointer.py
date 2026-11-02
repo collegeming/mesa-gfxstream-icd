@@ -41,7 +41,9 @@ OLD = '        void* hostAllocationPtr = nullptr;\n'
 NEW = ('        void* hostAllocationPtr = nullptr;\n'
        '        // True when hostAllocationPtr is an mmap of the handleInfo memfd rather\n'
        '        // than aligned_alloc memory; free with munmap instead of free.\n'
-       '        bool hostAllocationMapped = false;\n')
+       '        bool hostAllocationMapped = false;\n'
+       '        // Size of the mmap that backs hostAllocationPtr (buffer + guard).\n'
+       '        size_t hostAllocationMappedSize = 0;\n')
 if text.count(OLD) != 1:
     raise SystemExit(f'expected one header allocation anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
