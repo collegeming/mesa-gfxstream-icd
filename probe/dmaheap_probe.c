@@ -466,16 +466,24 @@ static void ahb_buffer_test(void) {
     VkExternalMemoryBufferCreateInfo ext = {0};
     ext.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
     ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    static const struct { const char* tag; VkBufferUsageFlags usage; } kUsages[] = {
+        {"transfer", VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT},
+        {"storage", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT},
+        {"uniform", VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT},
+    };
+    for (unsigned u = 0; u < sizeof(kUsages) / sizeof(kUsages[0]); u++) {
     VkBufferCreateInfo bci = {0};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.pNext = &ext;
     bci.size = 4096;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.usage = kUsages[u].usage;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VkBuffer buffer = VK_NULL_HANDLE;
     r = vkCreateBuffer(g_device, &bci, NULL, &buffer);
-    P("PROBE-AHB-BUF-CREATE result=%d", r);
-    if (r != VK_SUCCESS) { AHardwareBuffer_release(ahb); return; }
+    P("PROBE-AHB-BUF-CREATE %s result=%d", kUsages[u].tag, r);
+    if (r != VK_SUCCESS) continue;
 
     VkMemoryRequirements req = {0};
     vkGetBufferMemoryRequirements(g_device, buffer, &req);
@@ -519,6 +527,7 @@ static void ahb_buffer_test(void) {
         }
     }
     vkDestroyBuffer(g_device, buffer, NULL);
+    }
     AHardwareBuffer_release(ahb);
 }
 
