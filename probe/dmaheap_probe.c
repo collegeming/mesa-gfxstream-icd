@@ -556,6 +556,61 @@ static void ahb_buffer_test(void) {
     }
     vkDestroyBuffer(g_device, buffer, NULL);
     }
+
+    // Decisive for the SystemBlob design: can a VkBuffer created with external
+    // memory info take a plain host-pointer import (a memfd mapping)?
+    for (unsigned u = 0; u < sizeof(kUsages) / sizeof(kUsages[0]); u++) {
+        VkBufferCreateInfo bci = {0};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.pNext = &ext;
+        bci.size = 4096;
+        bci.usage = kUsages[u].usage;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VkBuffer buffer = VK_NULL_HANDLE;
+        r = vkCreateBuffer(g_device, &bci, NULL, &buffer);
+        if (r != VK_SUCCESS) { P("PROBE-HPTR-BUF-CREATE %s result=%d", kUsages[u].tag, r); continue; }
+        void* host = aligned_alloc(4096, 4096);
+        if (!host) { vkDestroyBuffer(g_device, buffer, NULL); continue; }
+        memset(host, 0, 4096);
+        VkMemoryHostPointerPropertiesEXT hpProps = {0};
+        hpProps.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+        vkGetMemoryHostPointerPropertiesEXT(
+            g_device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, host, &hpProps);
+        uint32_t hpType = 0xffffffffu;
+        for (uint32_t i = 0; i < 32; i++) {
+            if (hpProps.memoryTypeBits & (1u << i)) { hpType = i; break; }
+        }
+        P("PROBE-HPTR-BUF %s hpBits=0x%x type=%d", kUsages[u].tag, hpProps.memoryTypeBits,
+          (int)hpType);
+        if (hpType != 0xffffffffu) {
+            VkImportMemoryHostPointerInfoEXT hp = {0};
+            hp.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+            hp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+            hp.pHostPointer = host;
+            VkMemoryAllocateInfo ai = {0};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.pNext = &hp;
+            ai.allocationSize = 4096;
+            ai.memoryTypeIndex = hpType;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            r = vkAllocateMemory(g_device, &ai, NULL, &memory);
+            P("PROBE-HPTR-BUF-IMPORT %s result=%d", kUsages[u].tag, r);
+            if (r == VK_SUCCESS) {
+                r = vkBindBufferMemory(g_device, buffer, memory, 0);
+                P("PROBE-HPTR-BUF-BIND %s result=%d", kUsages[u].tag, r);
+                void* mapped = NULL;
+                if (r == VK_SUCCESS) r = vkMapMemory(g_device, memory, 0, 4096, 0, &mapped);
+                if (r == VK_SUCCESS) {
+                    ((unsigned char*)mapped)[0] = 0x5A;
+                    P("PROBE-HPTR-BUF-PIXELS %s %u (expect 90)", kUsages[u].tag,
+                      ((unsigned char*)mapped)[0]);
+                    vkUnmapMemory(g_device, memory);
+                }
+            }
+        }
+        vkDestroyBuffer(g_device, buffer, NULL);
+        free(host);
+    }
     AHardwareBuffer_release(ahb);
 }
 
