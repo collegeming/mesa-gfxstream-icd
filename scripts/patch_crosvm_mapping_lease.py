@@ -158,6 +158,21 @@ def patch(root):
                 }
                 let (slot, accept_handle) = match vm.runtime_share('''
     s = replace(s, old_share, new_share)
+    old_prep = """    } = region_state.mapped_regions.get(allocation)?;
+"""
+    new_prep = """    } = match region_state.mapped_regions.get(allocation) {
+        Some(region) => region,
+        None => {
+            base::warn!(
+                "CIB1-DIAG-CROSVM-MAPPREP: no prepared region for alloc={:?} offset={:#x}",
+                allocation,
+                dest_offset
+            );
+            return None;
+        }
+    };
+"""
+    s = replace(s, old_prep, new_prep)
     vmc.write_text(s, encoding='utf-8')
     changes[str(vmc)] = hashlib.sha256(vmc.read_bytes()).hexdigest()
 
