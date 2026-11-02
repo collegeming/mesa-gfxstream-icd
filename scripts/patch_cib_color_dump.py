@@ -43,34 +43,35 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                 const long intervalMs = strtol(intervalEnv, nullptr, 0);
                 if (intervalMs <= 0) return;
                 std::thread([this, intervalMs]() {
-                    std::map<uint32_t, int> dumps;
                     while (true) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-                        uint32_t resource = 0;
+                        std::vector<uint32_t> resources;
                         {
                             std::lock_guard<std::mutex> lock(mMutex);
                             for (auto& entry : mImageInfo) {
                                 const auto& img = entry.second;
                                 if (img.classicImageResource && img.classicImageBound) {
-                                    resource = img.classicImageResource;
+                                    resources.push_back(img.classicImageResource);
                                 }
                             }
                         }
-                        if (!resource) continue;
-                        if (dumps[resource] >= 3) continue;
-                        std::vector<uint8_t> bytes;
-                        if (!m_vkEmulation->readColorBufferToBytes(resource, &bytes)) {
-                            continue;
-                        }
-                        dumps[resource]++;
-                        char path[128];
-                        snprintf(path, sizeof(path), "/data/local/tmp/cib-%u-%d.rgba",
-                                 resource, dumps[resource]);
-                        int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-                        if (fd >= 0) {
-                            ssize_t written = write(fd, bytes.data(), bytes.size());
-                            (void)written;
-                            close(fd);
+                        std::sort(resources.begin(), resources.end());
+                        resources.erase(std::unique(resources.begin(), resources.end()),
+                                        resources.end());
+                        for (uint32_t resource : resources) {
+                            std::vector<uint8_t> bytes;
+                            if (!m_vkEmulation->readColorBufferToBytes(resource, &bytes)) {
+                                continue;
+                            }
+                            char path[128];
+                            snprintf(path, sizeof(path), "/data/local/tmp/cib-%u.rgba",
+                                     resource);
+                            int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+                            if (fd >= 0) {
+                                ssize_t written = write(fd, bytes.data(), bytes.size());
+                                (void)written;
+                                close(fd);
+                            }
                         }
                     }
                 }).detach();
