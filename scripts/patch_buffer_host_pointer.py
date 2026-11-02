@@ -6,14 +6,13 @@ classic buffer path, whose memory is allocated with the device-wide external
 memory mode. On this host that mode is AndroidAHB, so buffers get an AHB whose
 duplication into the guest's VkDeviceMemory fails (buffers are deliberately not
 AHB-exported, and Mali rejects AHB imports here anyway). The guest then sees
-VK_ERROR_OUT_OF_DEVICE_MEMORY for every ctypes-sized host-visible buffer, which
-is exactly the allocation zink/readback and vkcube fail on.
+VK_ERROR_OUT_OF_DEVICE_MEMORY for every small host-visible buffer, which is the
+allocation zink/readback and vkcube fail on.
 
 Allocate buffer memory the same way SystemBlob allocates blob memory instead:
 host memory imported with VK_EXT_external_memory_host. The guest's
 VkImportBufferGOOGLE then reuses that very host pointer, so the buffer never
-needs an AHB or dma-buf handle. Gated by GFXSTREAM_BUFFER_HOST_PTR=1 so other
-external-memory modes keep their behaviour.
+needs an AHB or dma-buf handle. Gated by GFXSTREAM_BUFFER_HOST_PTR=1.
 """
 import argparse
 from pathlib import Path
@@ -32,11 +31,22 @@ NEW = ('    void* getBufferHostPointer(uint32_t bufferHandle);\n'
        '    void* getBufferHostPointerAny(uint32_t bufferHandle);\n')
 if text.count(OLD) != 1:
     raise SystemExit(f'expected one header anchor, found {text.count(OLD)}')
-h.write_text(text.replace(OLD, NEW), encoding='utf-8', newline='')
+text = text.replace(OLD, NEW)
 
-# 2) Implementation next to the existing mode-gated accessor.
+OLD = ('        gfxstream::base::Optional<VkImage> imageForDedicatedAllocation = gfxstream::base::kNullopt,\n'
+       '        gfxstream::base::Optional<ColorBufferInfo*> colorBufferInfo = gfxstream::base::kNullopt);\n')
+NEW = ('        gfxstream::base::Optional<VkImage> imageForDedicatedAllocation = gfxstream::base::kNullopt,\n'
+       '        gfxstream::base::Optional<ColorBufferInfo*> colorBufferInfo = gfxstream::base::kNullopt,\n'
+       '        bool hostPointerBacked = false);\n')
+if text.count(OLD) != 1:
+    raise SystemExit(f'expected one declaration anchor, found {text.count(OLD)}')
+text = text.replace(OLD, NEW)
+h.write_text(text, encoding='utf-8', newline='')
+
 cpp = root / 'host/vulkan/vk_common_operations.cpp'
 text = cpp.read_text(encoding='utf-8')
+
+# 2) Implementation next to the mode-gated accessor.
 OLD = '''void* VkEmulation::getBufferHostPointer(uint32_t bufferHandle) {
     if (getExternalMemoryMode() != ExternalMemory::Mode::HostAllocation) {
         GFXSTREAM_ERROR("%s: external memory mode doesn't use host pointers!", __func__);
@@ -59,30 +69,27 @@ if text.count(OLD) != 1:
     raise SystemExit(f'expected one accessor anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
 
-# 3a) Mark buffer allocations from setupVkBuffer, dedicated or not.
-OLD = 'bool VkEmulation::allocExternalMemory('
-NEW = '''static thread_local bool tBufferHostPointerAlloc = false;
-
-bool VkEmulation::allocExternalMemory('''
+# 3) Definition gains the explicit parameter (no shared mutable state).
+OLD = '''bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalMemoryInfo* info,
+                                      Optional<uint64_t> deviceAlignment,
+                                      Optional<VkBuffer> bufferForDedicatedAllocation,
+                                      Optional<VkImage> imageForDedicatedAllocation,
+                                      Optional<ColorBufferInfo*> colorBufferInfo) {'''
+NEW = '''bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalMemoryInfo* info,
+                                      Optional<uint64_t> deviceAlignment,
+                                      Optional<VkBuffer> bufferForDedicatedAllocation,
+                                      Optional<VkImage> imageForDedicatedAllocation,
+                                      Optional<ColorBufferInfo*> colorBufferInfo,
+                                      bool hostPointerBacked) {'''
 if text.count(OLD) != 1:
-    raise SystemExit(f'expected one setupVkBuffer anchor, found {text.count(OLD)}')
+    raise SystemExit(f'expected one definition anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
 
-OLD = '    bool allocRes = allocExternalMemory(vk, &res.memory, deviceAlignment, dedicated_buffer);'
-NEW = '''    tBufferHostPointerAlloc =
-        gfxstream::base::getEnvironmentVariable("GFXSTREAM_BUFFER_HOST_PTR") == "1";
-    bool allocRes = allocExternalMemory(vk, &res.memory, deviceAlignment, dedicated_buffer);
-    tBufferHostPointerAlloc = false;'''
-if text.count(OLD) != 1:
-    raise SystemExit(f'expected one buffer alloc anchor, found {text.count(OLD)}')
-text = text.replace(OLD, NEW)
-
-# 3b) Force the host-allocation branch for classic buffer memory.
+# 4) Force the host-allocation branch for the classic buffer caller.
 OLD = '''    switch (getExternalMemoryMode()) {
         // For host-allocation external memory mode, allocate host side memory first, then import
         case ExternalMemory::Mode::HostAllocation: {'''
-NEW = '''    const bool bufferHostPointer =
-        tBufferHostPointerAlloc && supportsExternalMemoryHostProperties();
+NEW = '''    const bool bufferHostPointer = hostPointerBacked && supportsExternalMemoryHostProperties();
     switch (bufferHostPointer ? ExternalMemory::Mode::HostAllocation : getExternalMemoryMode()) {
         // For host-allocation external memory mode, allocate host side memory first, then import
         case ExternalMemory::Mode::HostAllocation: {'''
@@ -90,7 +97,7 @@ if text.count(OLD) != 1:
     raise SystemExit(f'expected one switch anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
 
-# 4) Move the physical type to one the driver accepts host pointers in.
+# 5) Move the physical type to one the driver accepts host pointers in.
 OLD = '''        // Update allocation size
         info->size = alignedSize;
         allocInfo.allocationSize = alignedSize;
@@ -118,9 +125,18 @@ NEW = '''        // Not every driver type accepts host pointers; move to one tha
 if text.count(OLD) != 1:
     raise SystemExit(f'expected one host-allocation anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
+
+# 6) setupVkBuffer opts in explicitly.
+OLD = '    bool allocRes = allocExternalMemory(vk, &res.memory, deviceAlignment, dedicated_buffer);'
+NEW = ('    bool allocRes = allocExternalMemory(\n'
+       '        vk, &res.memory, deviceAlignment, dedicated_buffer, kNullopt, kNullopt,\n'
+       '        gfxstream::base::getEnvironmentVariable("GFXSTREAM_BUFFER_HOST_PTR") == "1");')
+if text.count(OLD) != 1:
+    raise SystemExit(f'expected one buffer alloc anchor, found {text.count(OLD)}')
+text = text.replace(OLD, NEW)
 cpp.write_text(text, encoding='utf-8', newline='')
 
-# 5) Guest buffer import: prefer the recorded host pointer over any fd/AHB handle.
+# 7) Guest buffer import: prefer the recorded host pointer over any fd/AHB handle.
 d = root / 'host/vulkan/vk_decoder_global_state.cpp'
 text = d.read_text(encoding='utf-8')
 OLD = '''            if (opaqueFd && m_vkEmulation->supportsExternalMemoryImport()) {
