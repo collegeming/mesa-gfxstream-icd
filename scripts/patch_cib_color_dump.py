@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Dump bound CIB1 ColorBuffers to /data/local/tmp for pixel verification.
+"""Dump bound CIB1 ColorBuffers on request for pixel verification.
 
-When a CIB1 image is allocated, start a lazily-created diagnostic thread (only
-when GFXSTREAM_CIB_DUMP_MS is set) that every N milliseconds reads the most
-recently bound classic ColorBuffer through VkEmulation::readColorBufferToBytes
-and writes the raw pixels to /data/local/tmp/cib-<resource>-<n>.rgba. This is
-the host-side ground truth for "did Mali actually render the compositor's
-frame": if these files contain the bar/wallpaper, the remaining problem is the
-guest readback path; if they are black, the composition itself never reached the
-ColorBuffer.
+When the first CIB1 image is allocated, start a lazily-created diagnostic thread
+(only when GFXSTREAM_CIB_DUMP_REQUEST names a path). The thread waits, without
+touching the GPU, until that request file appears, then performs exactly one
+pass over the bound classic ColorBuffers: VkEmulation::readColorBufferToBytes
+and write /data/local/tmp/cib-<resource>.rgba. One manual pass at a known time
+is the low-interference way to answer "did Mali render the compositor's frame":
+periodic readbacks submit on the same physical queue as the compositor and can
+stall the guest (observed), while a single pass after the desktop is up does not.
 """
 import argparse
 from pathlib import Path
@@ -34,50 +34,51 @@ OLD = '''        mMemoryInfo[memory] = std::move(info);
 NEW = '''        mMemoryInfo[memory] = std::move(info);
         *output = new_boxed_non_dispatchable_VkDeviceMemory(memory);
         {
-            // Host-side ground truth: dump bound classic ColorBuffers so the
-            // composition can be checked without the guest readback path.
+            // On-demand ground truth: wait for a request file, then read the bound
+            // classic ColorBuffers once. No GPU work happens until the request.
             static std::once_flag cibDumpOnce;
             std::call_once(cibDumpOnce, [this]() {
-                const char* intervalEnv = getenv("GFXSTREAM_CIB_DUMP_MS");
-                if (!intervalEnv) return;
-                const long intervalMs = strtol(intervalEnv, nullptr, 0);
-                if (intervalMs <= 0) return;
-                std::thread([this, intervalMs]() {
-                    // One delayed pass only: the readback submits work on the same
-                    // physical queue as the compositor, so a periodic dump can stall
-                    // the guest. A single pass after the first frames is the
-                    // low-interference way to capture ground truth.
-                    {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-                        std::vector<uint32_t> resources;
-                        {
-                            std::lock_guard<std::mutex> lock(mMutex);
-                            for (auto& entry : mImageInfo) {
-                                const auto& img = entry.second;
-                                if (img.classicImageResource && img.classicImageBound) {
-                                    resources.push_back(img.classicImageResource);
-                                }
-                            }
+                const char* requestEnv = getenv("GFXSTREAM_CIB_DUMP_REQUEST");
+                if (!requestEnv || !*requestEnv) return;
+                const std::string requestPath(requestEnv);
+                std::thread([this, requestPath]() {
+                    bool requested = false;
+                    for (int i = 0; i < 600; i++) {
+                        if (access(requestPath.c_str(), F_OK) == 0) {
+                            requested = true;
+                            break;
                         }
-                        std::sort(resources.begin(), resources.end());
-                        resources.erase(std::unique(resources.begin(), resources.end()),
-                                        resources.end());
-                        for (uint32_t resource : resources) {
-                            std::vector<uint8_t> bytes;
-                            if (!m_vkEmulation->readColorBufferToBytes(resource, &bytes)) {
-                                continue;
-                            }
-                            char path[128];
-                            snprintf(path, sizeof(path), "/data/local/tmp/cib-%u.rgba",
-                                     resource);
-                            int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-                            if (fd >= 0) {
-                                ssize_t written = write(fd, bytes.data(), bytes.size());
-                                (void)written;
-                                close(fd);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    }
+                    if (!requested) return;
+                    std::vector<uint32_t> resources;
+                    {
+                        std::lock_guard<std::mutex> lock(mMutex);
+                        for (auto& entry : mImageInfo) {
+                            const auto& img = entry.second;
+                            if (img.classicImageResource && img.classicImageBound) {
+                                resources.push_back(img.classicImageResource);
                             }
                         }
                     }
+                    std::sort(resources.begin(), resources.end());
+                    resources.erase(std::unique(resources.begin(), resources.end()),
+                                    resources.end());
+                    for (uint32_t resource : resources) {
+                        std::vector<uint8_t> bytes;
+                        if (!m_vkEmulation->readColorBufferToBytes(resource, &bytes)) {
+                            continue;
+                        }
+                        char path[128];
+                        snprintf(path, sizeof(path), "/data/local/tmp/cib-%u.rgba", resource);
+                        int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+                        if (fd >= 0) {
+                            ssize_t written = write(fd, bytes.data(), bytes.size());
+                            (void)written;
+                            close(fd);
+                        }
+                    }
+                    rename(requestPath.c_str(), "/data/local/tmp/cib-dump-done");
                 }).detach();
             });
         }
@@ -86,4 +87,4 @@ if text.count(OLD) != 1:
     raise SystemExit(f'expected one CIB allocation anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
 d.write_text(text, encoding='utf-8', newline='')
-print('CIB ColorBuffer dump thread patched')
+print('CIB ColorBuffer on-request dump patched')
