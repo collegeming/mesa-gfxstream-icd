@@ -1,0 +1,78 @@
+name: build-dmaheap-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/mali-drm-modifier]
+    paths:
+      - 'probe/dmaheap_probe.c'
+      - '.github/workflows/build-dmaheap-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout probe sources
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: ci
+          persist-credentials: false
+
+      - name: Checkout pinned Vulkan-Headers 1.4.358
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: 11d6898377797e07dbd543aaaa367e4465074597
+          path: vkheaders
+          persist-credentials: false
+
+      - name: Fetch Android NDK r27c
+        run: |
+          mkdir -p "$RUNNER_TEMP/ndk-download" "$RUNNER_TEMP/ndk-extract" out
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/ndk-download/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          printf '%s  %s\n' '090e8083a715fdb1a3e402d0763c388abb03fb4e' "$RUNNER_TEMP/ndk-download/ndk.zip" | sha1sum -c -
+          unzip -q "$RUNNER_TEMP/ndk-download/ndk.zip" -d "$RUNNER_TEMP/ndk-extract"
+          printf 'ANDROID_NDK_HOME=%s/ndk-extract/android-ndk-r27c\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          grep -Eq '^Pkg.Revision = 27.2.12479018$' "$RUNNER_TEMP/ndk-extract/android-ndk-r27c/source.properties"
+
+      - name: Build aarch64 Android 33 probe
+        run: |
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" \
+            -O2 -Wall -Wextra -Werror \
+            -I vkheaders/include \
+            -o out/dmaheap_probe ci/probe/dmaheap_probe.c -lvulkan
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h out/dmaheap_probe
+
+      - name: Package binary, provenance, and checksums
+        run: |
+          cp "$ANDROID_NDK_HOME/source.properties" out/ndk-source.properties
+          sha256sum out/dmaheap_probe ci/probe/dmaheap_probe.c > out/SHA256SUMS
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          prov = {
+              "name": "dmaheap-probe-android33-arm64",
+              "source_commit": os.environ.get("GITHUB_SHA", ""),
+              "source_path": "probe/dmaheap_probe.c",
+              "source_sha256": hashlib.sha256(Path("ci/probe/dmaheap_probe.c").read_bytes()).hexdigest(),
+              "vulkan_headers_commit": "11d6898377797e07dbd543aaaa367e4465074597",
+              "ndk": "r27c (27.2.12479018)",
+              "abi": "aarch64-linux-android33",
+              "sha256": {"dmaheap_probe": hashlib.sha256(Path("out/dmaheap_probe").read_bytes()).hexdigest()},
+          }
+          Path("out/provenance.json").write_text(json.dumps(prov, indent=2) + "\n")
+          print(json.dumps(prov, indent=2))
+          PY
+          cat out/SHA256SUMS
+
+      - name: Upload probe artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dmaheap-probe-android33-arm64-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
