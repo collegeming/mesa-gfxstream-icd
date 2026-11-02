@@ -278,15 +278,11 @@ jobs:
           Path('evidence/crosvm-gpu-create-trace.patch').write_text(''.join(lines))
           # Original calls and result conversions must survive unchanged.
           dev = Path('source/devices/src/virtio/gpu/virtio_gpu.rs').read_text()
-          assert 'let create_result = self.rutabaga.resource_create_3d(resource_id, resource_create_3d);' in dev
-          assert 'create_result?;' in dev
-          assert dev.count('GFXSTREAM_NIRI_IMAGE_TRACE') == 1
-          assert dev.count('USED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16') == 1
-          gfx = Path('source/rutabaga_gfx/src/gfxstream.rs').read_text()
-          assert 'let ret = unsafe { stream_renderer_resource_create(&mut args, null_mut(), 0) };' in gfx
-          assert 'ret_to_res(ret)?;' in gfx
-          assert gfx.count('GFXSTREAM_NIRI_IMAGE_TRACE') == 1
-          assert gfx.count('USED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16') == 1
+          assert dev.count('CIB1-DIAG-CROSVM-UNMAPBLOB') == 1
+          assert dev.count('CIB1-DIAG-CROSVM-MAPBLOB') == 2
+          assert dev.count('offset_taken_over') == 2
+          assert 'blob_detach::detach(' in dev
+          assert 'resource.shmem_offset = Some(offset);' in dev
           PY
           git -C source diff --check
           cd source

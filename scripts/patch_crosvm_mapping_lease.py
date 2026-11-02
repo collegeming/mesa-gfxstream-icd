@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Keep a BAR-offset blob mapping alive when a newer resource has taken the offset over.
 
-The guest's drm_mm may hand a freed BAR offset to a new blob before the UNMAP for the old
-blob reaches the VMM. The mapper is keyed by offset, so the new MAP overwrites the old entry
-and the later UNMAP unregisters whatever is there now: the new blob's guest mapping is left
-pointing at an unbacked aperture (reads 0xff, writes dropped). Observed as an ASG ring whose
-guest side never reaches the host. Do not remove an offset a live resource has taken over, and
-log the MAP offsets so the same scene can be read back from logcat.
+Applied after the audited native detach patch. The guest's drm_mm can hand a freed BAR offset
+to a new blob before the UNMAP for the old blob reaches the VMM; the offset-keyed mapper then
+unregisters the new blob's mapping and leaves its guest aperture unbacked (reads 0xff, writes
+dropped). Do not detach an offset a live resource has taken over, and log map offsets.
 """
 import argparse
 import hashlib
@@ -48,8 +46,11 @@ def patch(root):
             });'''
     s = replace(s, old_lease, new_lease)
 
-    old_map = '''        resource.shmem_offset = Some(offset);'''
-    new_map = '''        if std::env::var_os("GFXSTREAM_NIRI_IMAGE_TRACE").as_deref()
+    old_map = '''        let res_size = resource.size;
+        // Record the attempted offset BEFORE sending: lost replies can leave a live memslot.
+        resource.shmem_offset = Some(offset);'''
+    new_map = '''        let res_size = resource.size;
+        if std::env::var_os("GFXSTREAM_NIRI_IMAGE_TRACE").as_deref()
             == Some(std::ffi::OsStr::new("1"))
         {
             base::warn!(
@@ -60,55 +61,46 @@ def patch(root):
                 cache
             );
         }
+        // Record the attempted offset BEFORE sending: lost replies can leave a live memslot.
         resource.shmem_offset = Some(offset);'''
     s = replace(s, old_map, new_map)
 
-    old_unmap_head = '''    pub fn resource_unmap_blob(&mut self, resource_id: u32) -> VirtioGpuResult {
-'''
-    new_unmap_head = '''    pub fn resource_unmap_blob(&mut self, resource_id: u32) -> VirtioGpuResult {
+    old_detach = '''    fn detach_blob_mapping(&mut self, resource_id: u32) -> VirtioGpuResult {
+        let resource = self.resources.get_mut(&resource_id).ok_or(ErrInvalidResourceId)?;
+        blob_detach::detach('''
+    new_detach = '''    fn detach_blob_mapping(&mut self, resource_id: u32) -> VirtioGpuResult {
         // An offset is only a name. The guest can allocate a freed BAR offset for a new blob
-        // before this UNMAP for the old one reaches us; the mapper is keyed by that offset, so
-        // removing it now would unregister the new blob's mapping and leave its guest aperture
-        // unbacked. Decide from a live resource that shares the offset, before taking the
-        // mutable borrow below.
-        let offset_taken_over = match self.resources.get(&resource_id) {
-            Some(pre) => match pre.shmem_offset {
-                Some(pre_offset) => self.resources.iter().any(|(id, other)| {
-                    *id != resource_id && other.shmem_offset == Some(pre_offset)
-                }),
+        // before this UNMAP for the old one reaches us; detaching now would unregister the new
+        // blob's mapping and leave its guest aperture unbacked. Decide from a live resource that
+        // shares the offset, before the mutable borrow below.
+        {
+            let offset_taken_over = match self.resources.get(&resource_id) {
+                Some(pre) => match pre.shmem_offset {
+                    Some(pre_offset) => self.resources.iter().any(|(id, other)| {
+                        *id != resource_id && other.shmem_offset == Some(pre_offset)
+                    }),
+                    None => false,
+                },
                 None => false,
-            },
-            None => false,
-        };
-'''
-    s = replace(s, old_unmap_head, new_unmap_head)
-
-    old_unmap = '''        let shmem_offset = resource.shmem_offset.ok_or(ErrUnspec)?;
-        self.mapper
-            .lock()
-            .as_mut()
-            .expect("No backend request connection found")
-            .remove_mapping(shmem_offset)
-            .map_err(|_| ErrUnspec)?;
-        resource.shmem_offset = None;'''
-    new_unmap = '''        let shmem_offset = resource.shmem_offset.ok_or(ErrUnspec)?;
-        if offset_taken_over {
-            base::warn!(
-                "CIB1-DIAG-CROSVM-UNMAPBLOB: res={} offset={:#x} is owned by a live resource; keeping the mapping",
-                resource_id,
-                shmem_offset
-            );
-            resource.shmem_offset = None;
-            return Ok(OkNoData);
+            };
+            if offset_taken_over {
+                base::warn!(
+                    "CIB1-DIAG-CROSVM-UNMAPBLOB: res={} offset is owned by a live resource; keeping the mapping",
+                    resource_id
+                );
+                let resource = self
+                    .resources
+                    .get_mut(&resource_id)
+                    .ok_or(ErrInvalidResourceId)?;
+                resource.shmem_offset = None;
+                resource.rutabaga_external_mapping = false;
+                resource.pool_offset = None;
+                return Ok(OkNoData);
+            }
         }
-        self.mapper
-            .lock()
-            .as_mut()
-            .expect("No backend request connection found")
-            .remove_mapping(shmem_offset)
-            .map_err(|_| ErrUnspec)?;
-        resource.shmem_offset = None;'''
-    s = replace(s, old_unmap, new_unmap)
+        let resource = self.resources.get_mut(&resource_id).ok_or(ErrInvalidResourceId)?;
+        blob_detach::detach('''
+    s = replace(s, old_detach, new_detach)
 
     p.write_text(s, encoding='utf-8')
     changes[str(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
