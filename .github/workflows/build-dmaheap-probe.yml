@@ -45,7 +45,7 @@ jobs:
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" \
             -O2 -Wall -Wextra -Werror \
             -I vkheaders/include \
-            -o out/dmaheap_probe ci/probe/dmaheap_probe.c -lvulkan
+            -o out/dmaheap_probe ci/probe/dmaheap_probe.c -lvulkan -landroid
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h out/dmaheap_probe
 
       - name: Package binary, provenance, and checksums
