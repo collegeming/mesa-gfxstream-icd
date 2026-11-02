@@ -116,7 +116,7 @@ def patch(root):
             .register_memory_for_blob('''
     new_pci = '''        if let Some(previous_id) = self.mappings.remove(&offset) {
             base::warn!(
-                "CIB1-DIAG-CROSVM-MAPBLOB: offset={:#x} replaces mapping id={}; unregistering the stale owner",
+                "CIB1-DIAG-CROSVM-MAPBLOB: offset={:#x} replaces mapping id={:?}; unregistering the stale owner",
                 offset,
                 previous_id
             );
