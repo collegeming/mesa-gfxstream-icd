@@ -359,6 +359,77 @@ static void buffer_import_test(int fd, const char *tag) {
     vkDestroyBuffer(g_device, buffer, NULL);
 }
 
+
+// Can Mali use VK_EXT_external_memory_host for *images*? If yes, the GpuPool's
+// host VA (or any host-mapped guest RAM) can back a Mali image with no dma-buf
+// exporter at all. Query first, then import an ordinary page-aligned host buffer.
+static void host_pointer_test(void) {
+    VkPhysicalDeviceImageDrmFormatModifierInfoEXT mod = {0};
+    mod.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT;
+    mod.drmFormatModifier = 0;
+    mod.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkPhysicalDeviceExternalImageFormatInfo ext_fmt = {0};
+    ext_fmt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
+    ext_fmt.pNext = &mod;
+    ext_fmt.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    VkPhysicalDeviceImageFormatInfo2 fmt = {0};
+    fmt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+    fmt.pNext = &ext_fmt;
+    fmt.format = VK_FORMAT_B8G8R8A8_UNORM;
+    fmt.type = VK_IMAGE_TYPE_2D;
+    fmt.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+    fmt.usage = USAGE;
+    VkExternalImageFormatProperties ext_props = {0};
+    ext_props.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
+    VkImageFormatProperties2 ifp = {0};
+    ifp.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+    ifp.pNext = &ext_props;
+    VkResult r = vkGetPhysicalDeviceImageFormatProperties2(g_phys, &fmt, &ifp);
+    P("PROBE-HOST-QUERY result=%d extFeatures=0x%x compatible=0x%x", r,
+      ext_props.externalMemoryProperties.externalMemoryFeatures,
+      ext_props.externalMemoryProperties.compatibleHandleTypes);
+    if (r != VK_SUCCESS) return;
+
+    struct create_variant v = {"hostptr", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, 0, USAGE};
+    VkImage image = VK_NULL_HANDLE;
+    if (create_image(&v, &image) != VK_SUCCESS) return;
+
+    void *host = aligned_alloc(4096, (size_t)IMAGE_SIZE);
+    if (host) memset(host, 0x5a, (size_t)IMAGE_SIZE);
+    P("PROBE-HOST-ALLOC ptr=%p aligned=%d", host, host && ((uintptr_t)host % 4096) == 0);
+
+    VkMemoryRequirements req = {0};
+    vkGetImageMemoryRequirements(g_device, image, &req);
+    P("PROBE-HOST-REQ size=%llu bits=0x%x", (unsigned long long)req.size, req.memoryTypeBits);
+    for (uint32_t i = 0; host && i < 32; i++) {
+        if ((req.memoryTypeBits & (1u << i)) == 0) continue;
+        VkMemoryDedicatedAllocateInfo dedicated = {0};
+        dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated.image = image;
+        VkImportMemoryHostPointerInfoEXT imp = {0};
+        imp.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+        imp.pNext = &dedicated;
+        imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        imp.pHostPointer = host;
+        VkMemoryAllocateInfo ai = {0};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.pNext = &imp;
+        ai.allocationSize = align_up(req.size, 4096);
+        ai.memoryTypeIndex = i;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        r = vkAllocateMemory(g_device, &ai, NULL, &memory);
+        P("PROBE-HOST-IMAGE-IMPORT type=%u result=%d", i, r);
+        if (r == VK_SUCCESS) {
+            r = vkBindImageMemory(g_device, image, memory, 0);
+            P("PROBE-HOST-IMAGE-BIND type=%u result=%d", i, r);
+            if (r == VK_SUCCESS) render_check(image, "hostptr");
+            break;
+        }
+    }
+    vkDestroyImage(g_device, image, NULL);
+    free(host);
+}
+
 int main(void) {
     char ctx[128] = {0};
     int n = (int)readlink("/proc/self/attr/current", ctx, sizeof(ctx) - 1);
@@ -503,6 +574,8 @@ int main(void) {
         }
         close(fd);
     }
+
+    host_pointer_test();
 
     P("PROBE-DONE");
     return 0;
