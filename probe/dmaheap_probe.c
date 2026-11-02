@@ -45,6 +45,7 @@ static uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1)
 
 static int make_heap_fd(const char *path, uint64_t size) {
     int heap = open(path, O_RDONLY | O_CLOEXEC);
+    if (heap < 0) heap = open(path, O_RDWR | O_CLOEXEC);
     if (heap < 0) {
         P("PROBE-HEAP-OPEN %s errno=%d", path, errno);
         return -1;
@@ -153,26 +154,9 @@ static VkResult create_image(const struct create_variant *v, VkImage *image) {
     return r;
 }
 
-static VkResult import_image(int fd, VkImage image, const char *tag) {
+static VkResult import_image_type(int fd, VkImage image, const char *tag, int index) {
     VkMemoryRequirements req = {0};
     vkGetImageMemoryRequirements(g_device, image, &req);
-    P("PROBE-IMG-REQ %s size=%llu align=%llu bits=0x%x fd=%d", tag,
-      (unsigned long long)req.size, (unsigned long long)req.alignment, req.memoryTypeBits, fd);
-
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(g_phys, &mp);
-    int index = -1;
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
-        if ((req.memoryTypeBits & (1u << i)) != 0) {
-            if (index < 0) index = (int)i;
-            P("PROBE-MEMTYPE %s index=%u flags=0x%x heap=%u", tag, i,
-              mp.memoryTypes[i].propertyFlags, mp.memoryTypes[i].heapIndex);
-        }
-    }
-    if (index < 0) {
-        P("PROBE-IMPORT %s result=NO-MEMTYPE", tag);
-        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    }
 
     VkMemoryDedicatedAllocateInfo dedicated = {0};
     dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
@@ -182,7 +166,7 @@ static VkResult import_image(int fd, VkImage image, const char *tag) {
     import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
     import.pNext = &dedicated;
     import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    import.fd = fd;
+    import.fd = dup(fd);
 
     VkMemoryAllocateInfo ai = {0};
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -192,12 +176,29 @@ static VkResult import_image(int fd, VkImage image, const char *tag) {
 
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkResult r = vkAllocateMemory(g_device, &ai, NULL, &memory);
-    P("PROBE-IMPORT %s result=%d memory=%p type=%d", tag, r, (void *)memory, index);
+    P("PROBE-IMPORT %s type=%d result=%d memory=%p", tag, index, r, (void *)memory);
     if (r != VK_SUCCESS) return r;
 
     r = vkBindImageMemory(g_device, image, memory, 0);
-    P("PROBE-BIND %s result=%d", tag, r);
+    P("PROBE-BIND %s type=%d result=%d", tag, index, r);
     return r;
+}
+
+static void import_image(int fd, VkImage image, const char *tag) {
+    VkMemoryRequirements req = {0};
+    vkGetImageMemoryRequirements(g_device, image, &req);
+    P("PROBE-IMG-REQ %s size=%llu align=%llu bits=0x%x fd=%d", tag,
+      (unsigned long long)req.size, (unsigned long long)req.alignment, req.memoryTypeBits, fd);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_phys, &mp);
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((req.memoryTypeBits & (1u << i)) == 0) continue;
+        VkResult r = import_image_type(fd, image, tag, (int)i);
+        if (r == VK_SUCCESS) {
+            render_check(image, tag);
+            return;
+        }
+    }
 }
 
 static void render_check(VkImage image, const char *tag) {
@@ -330,34 +331,30 @@ static void buffer_import_test(int fd, const char *tag) {
 
     VkMemoryRequirements req = {0};
     vkGetBufferMemoryRequirements(g_device, buffer, &req);
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(g_phys, &mp);
-    int index = -1;
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
-        if (req.memoryTypeBits & (1u << i)) { index = (int)i; break; }
-    }
-    P("PROBE-BUF-REQ %s size=%llu bits=0x%x type=%d", tag,
-      (unsigned long long)req.size, req.memoryTypeBits, index);
-
-    VkMemoryDedicatedAllocateInfo dedicated = {0};
-    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-    dedicated.buffer = buffer;
-    VkImportMemoryFdInfoKHR import = {0};
-    import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
-    import.pNext = &dedicated;
-    import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    import.fd = fd;
-    VkMemoryAllocateInfo ai = {0};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.pNext = &import;
-    ai.allocationSize = align_up(req.size, 4096);
-    ai.memoryTypeIndex = (uint32_t)(index < 0 ? 0 : index);
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    r = vkAllocateMemory(g_device, &ai, NULL, &memory);
-    P("PROBE-BUF-IMPORT %s result=%d", tag, r);
-    if (r == VK_SUCCESS) {
-        r = vkBindBufferMemory(g_device, buffer, memory, 0);
-        P("PROBE-BUF-BIND %s result=%d", tag, r);
+    P("PROBE-BUF-REQ %s size=%llu bits=0x%x", tag, (unsigned long long)req.size, req.memoryTypeBits);
+    for (uint32_t i = 0; i < 32; i++) {
+        if ((req.memoryTypeBits & (1u << i)) == 0) continue;
+        VkMemoryDedicatedAllocateInfo dedicated = {0};
+        dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated.buffer = buffer;
+        VkImportMemoryFdInfoKHR import = {0};
+        import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+        import.pNext = &dedicated;
+        import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        import.fd = dup(fd);
+        VkMemoryAllocateInfo ai = {0};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.pNext = &import;
+        ai.allocationSize = align_up(req.size, 4096);
+        ai.memoryTypeIndex = i;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        r = vkAllocateMemory(g_device, &ai, NULL, &memory);
+        P("PROBE-BUF-IMPORT %s type=%u result=%d", tag, i, r);
+        if (r == VK_SUCCESS) {
+            r = vkBindBufferMemory(g_device, buffer, memory, 0);
+            P("PROBE-BUF-BIND %s type=%u result=%d", tag, i, r);
+            break;
+        }
     }
     vkDestroyBuffer(g_device, buffer, NULL);
 }
@@ -482,30 +479,31 @@ int main(void) {
       ext_props.externalMemoryProperties.compatibleHandleTypes);
 
     uint64_t need = align_up(IMAGE_SIZE, 4096);
-    int heap_fd = make_heap_fd("/dev/dma_heap/system", need);
-    if (heap_fd >= 0) buffer_import_test(heap_fd, "heap-system");
-
-    struct create_variant variants[] = {
-        {"flat",        0,                        0, 1, IMAGE_SIZE, USAGE},
-        {"mutable",     VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, IMAGE_SIZE, USAGE},
-        {"mutable-sz0", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, 0,         USAGE},
-        {"mutable-list",VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 0, 0,         USAGE},
-        {"flat-list",   0,                        0, 0, 0,                   USAGE},
-        {"mutable-u17", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, IMAGE_SIZE,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+    const char *heaps[] = {"/dev/dma_heap/system", "/dev/dma_heap/system-uncached",
+                           "/dev/dma_heap/linux,cma", "/dev/dma_heap/xring_heap_drm",
+                           "/dev/dma_heap/xring_cpa"};
+    struct create_variant img_variants[] = {
+        {"mutable-sz0", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, 0, USAGE},
+        {"flat-list",   0,                                  0, 0, 0, USAGE},
     };
-    for (unsigned i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
-        VkImage image = VK_NULL_HANDLE;
-        if (create_image(&variants[i], &image) != VK_SUCCESS) continue;
-        if (heap_fd >= 0) {
-            VkResult ir = import_image(heap_fd, image, variants[i].tag);
-            if (ir == VK_SUCCESS) render_check(image, variants[i].tag);
+    for (unsigned h = 0; h < sizeof(heaps) / sizeof(heaps[0]); h++) {
+        int fd = make_heap_fd(heaps[h], need);
+        if (fd < 0) continue;
+        char tag[96];
+        const char *base = strrchr(heaps[h], '/');
+        base = base ? base + 1 : heaps[h];
+        snprintf(tag, sizeof(tag), "buf:%s", base);
+        buffer_import_test(fd, tag);
+        for (unsigned v = 0; v < sizeof(img_variants) / sizeof(img_variants[0]); v++) {
+            VkImage image = VK_NULL_HANDLE;
+            if (create_image(&img_variants[v], &image) != VK_SUCCESS) continue;
+            snprintf(tag, sizeof(tag), "img:%s:%s", base, img_variants[v].tag);
+            import_image(fd, image, tag);
+            vkDestroyImage(g_device, image, NULL);
         }
-        vkDestroyImage(g_device, image, NULL);
+        close(fd);
     }
 
-    if (heap_fd >= 0) close(heap_fd);
     P("PROBE-DONE");
     return 0;
 }
