@@ -30,6 +30,7 @@ on:
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
       - 'scripts/*systemblob*'
+      - 'scripts/*buffer_host_pointer*'
 
 permissions:
   contents: read
@@ -285,7 +286,9 @@ jobs:
           grep -q 'STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE' source/host/virtio_gpu_resource.cpp
           python3 -I ci/scripts/patch_systemblob_host_pointer_type.py source
           grep -q 'SYSBLOB-HOSTPTR' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_systemblob_host_pointer_type.py out/
+          python3 -I ci/scripts/patch_buffer_host_pointer.py source
+          grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_systemblob_host_pointer_type.py ci/scripts/patch_buffer_host_pointer.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
