@@ -1,10 +1,10 @@
-// Mali external-memory import probe for Android hosts.
+// Mali external-memory import probe for Android hosts (v2).
 //
-// Answers one question with real hardware: can this Mali driver import a dma-buf
-// produced by /dev/dma_heap (the exporter gralloc and Arm's WSI layer use) as a
-// VkImage, and does it behave differently from a udmabuf produced by the kernel's
-// udmabuf driver? Both exporters page-back a memfd, so a difference isolates the
-// exporter/dma-buf-ops as the cause of VK_ERROR_INVALID_EXTERNAL_HANDLE.
+// Question 1: does this Mali driver import a /dev/dma_heap dma-buf as a
+// VkImage (and as a VkBuffer)? Question 2: which exact VkImageCreateInfo shape
+// does it accept for DMA_BUF + explicit LINEAR, given that the gfxstream host
+// process succeeded with the same tuple from the guest while a naive standalone
+// create fails with VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT?
 //
 // Build: NDK aarch64-linux-android33-clang, link -lvulkan (Android loader).
 // Run on device as root; prints PROBE-* lines and exits 0 even when imports fail.
@@ -23,10 +23,6 @@
 
 #include <vulkan/vulkan.h>
 
-#ifndef VK_EXT_external_memory_dma_buf
-#define VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME "VK_EXT_external_memory_dma_buf"
-#endif
-
 struct dma_heap_allocation_data {
     uint64_t len;
     uint32_t fd;
@@ -35,15 +31,6 @@ struct dma_heap_allocation_data {
 };
 #define DMA_HEAP_IOC_MAGIC 'H'
 #define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0, struct dma_heap_allocation_data)
-
-struct udmabuf_create {
-    uint32_t memfd;
-    uint32_t flags;
-    uint64_t offset;
-    uint64_t size;
-};
-#define UDMABUF_CREATE _IOW('u', 0x42, struct udmabuf_create)
-#define UDMABUF_FLAGS_CLOEXEC 0x02
 
 #define WIDTH 1280
 #define HEIGHT 720
@@ -76,48 +63,6 @@ static int make_heap_fd(const char *path, uint64_t size) {
     return fd;
 }
 
-static int make_udmabuf_fd(uint64_t size) {
-    int memfd = (int)syscall(SYS_memfd_create, "probe-udmabuf", 0x0001 /* MFD_CLOEXEC */);
-    if (memfd < 0) {
-        P("PROBE-UDMA-MEMFD errno=%d", errno);
-        return -1;
-    }
-    if (ftruncate(memfd, (off_t)size) != 0) {
-        P("PROBE-UDMA-FTRUNCATE errno=%d", errno);
-        close(memfd);
-        return -1;
-    }
-    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
-    if (p == MAP_FAILED) {
-        P("PROBE-UDMA-MMAP errno=%d", errno);
-        close(memfd);
-        return -1;
-    }
-    for (uint64_t off = 0; off < size; off += 4096) ((volatile char *)p)[off] = 1;
-    munmap(p, size);
-
-    int ctl = open("/dev/udmabuf", O_RDONLY | O_CLOEXEC);
-    if (ctl < 0) {
-        P("PROBE-UDMA-CTL errno=%d", errno);
-        close(memfd);
-        return -1;
-    }
-    struct udmabuf_create create = {0};
-    create.memfd = (uint32_t)memfd;
-    create.flags = UDMABUF_FLAGS_CLOEXEC;
-    create.size = size;
-    int fd = ioctl(ctl, UDMABUF_CREATE, &create);
-    int saved = errno;
-    close(ctl);
-    close(memfd);
-    if (fd < 0) {
-        P("PROBE-UDMA-CREATE size=%llu errno=%d", (unsigned long long)size, saved);
-        return -1;
-    }
-    P("PROBE-UDMA-CREATE size=%llu fd=%d", (unsigned long long)size, fd);
-    return fd;
-}
-
 static VkInstance g_instance;
 static VkPhysicalDevice g_phys;
 static VkDevice g_device;
@@ -137,11 +82,29 @@ static int has_ext(const char *name) {
     return found;
 }
 
-static int create_image(VkImage *image, const char *tag) {
+struct create_variant {
+    const char *tag;
+    VkImageCreateFlags flags;
+    int view_formats;
+    int explicit_mod;
+    uint64_t plane_size;
+    VkImageUsageFlags usage;
+};
+
+static VkResult create_image(const struct create_variant *v, VkImage *image) {
+    VkImageFormatListCreateInfo view_list = {0};
+    view_list.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+    static const VkFormat formats[2] = {VK_FORMAT_B8G8R8A8_UNORM,
+                                        VK_FORMAT_B8G8R8A8_SRGB};
+    if (v->view_formats) {
+        view_list.viewFormatCount = 2;
+        view_list.pViewFormats = formats;
+    }
+
     VkSubresourceLayout plane = {0};
     plane.offset = 0;
     plane.rowPitch = STRIDE;
-    plane.size = IMAGE_SIZE;
+    plane.size = v->plane_size;
 
     VkImageDrmFormatModifierExplicitCreateInfoEXT explicit_mod = {0};
     explicit_mod.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
@@ -149,15 +112,30 @@ static int create_image(VkImage *image, const char *tag) {
     explicit_mod.drmFormatModifierPlaneCount = 1;
     explicit_mod.pPlaneLayouts = &plane;
 
+    uint64_t modifier = 0;
+    VkImageDrmFormatModifierListCreateInfoEXT list_mod = {0};
+    list_mod.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT;
+    list_mod.drmFormatModifierCount = 1;
+    list_mod.pDrmFormatModifiers = &modifier;
+
     VkExternalMemoryImageCreateInfo external = {0};
     external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
     external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    external.pNext = NULL;
-    explicit_mod.pNext = &external;
+
+    void *tail = v->view_formats ? (void *)&view_list : NULL;
+    external.pNext = tail;
+    if (v->explicit_mod) {
+        explicit_mod.pNext = &external;
+        tail = &explicit_mod;
+    } else {
+        list_mod.pNext = &external;
+        tail = &list_mod;
+    }
 
     VkImageCreateInfo ci = {0};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ci.pNext = &explicit_mod;
+    ci.pNext = tail;
+    ci.flags = v->flags;
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = VK_FORMAT_B8G8R8A8_UNORM;
     ci.extent.width = WIDTH;
@@ -167,15 +145,15 @@ static int create_image(VkImage *image, const char *tag) {
     ci.arrayLayers = 1;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-    ci.usage = USAGE;
+    ci.usage = v->usage;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkResult r = vkCreateImage(g_device, &ci, NULL, image);
-    P("PROBE-IMAGE-CREATE %s result=%d image=%p", tag, r, (void *)*image);
+    P("PROBE-IMAGE-CREATE %s result=%d image=%p", v->tag, r, (void *)*image);
     return r;
 }
 
-static int import_image(int fd, VkImage image, const char *tag) {
+static VkResult import_image(int fd, VkImage image, const char *tag) {
     VkMemoryRequirements req = {0};
     vkGetImageMemoryRequirements(g_device, image, &req);
     P("PROBE-IMG-REQ %s size=%llu align=%llu bits=0x%x fd=%d", tag,
@@ -193,7 +171,7 @@ static int import_image(int fd, VkImage image, const char *tag) {
     }
     if (index < 0) {
         P("PROBE-IMPORT %s result=NO-MEMTYPE", tag);
-        return -1;
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
 
     VkMemoryDedicatedAllocateInfo dedicated = {0};
@@ -215,15 +193,13 @@ static int import_image(int fd, VkImage image, const char *tag) {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkResult r = vkAllocateMemory(g_device, &ai, NULL, &memory);
     P("PROBE-IMPORT %s result=%d memory=%p type=%d", tag, r, (void *)memory, index);
-    if (r != VK_SUCCESS) return (int)r;
+    if (r != VK_SUCCESS) return r;
 
     r = vkBindImageMemory(g_device, image, memory, 0);
     P("PROBE-BIND %s result=%d", tag, r);
-    return (int)r;
+    return r;
 }
 
-// Clear the imported image with Mali and read the pixels back through a normal
-// host-visible buffer, so a successful import is also proven to render.
 static void render_check(VkImage image, const char *tag) {
     VkBufferCreateInfo bci = {0};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -290,7 +266,8 @@ static void render_check(VkImage image, const char *tag) {
     to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     to_general.image = image;
     to_general.subresourceRange = range;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                          0, 0, NULL, 0, NULL, 1, &to_general);
 
     VkClearColorValue clear = {{1.0f, 0.0f, 1.0f, 1.0f}};  // magenta
@@ -301,7 +278,8 @@ static void render_check(VkImage image, const char *tag) {
     to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     to_src.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0, 0, NULL, 0, NULL, 1, &to_src);
 
     VkBufferImageCopy region = {0};
@@ -335,6 +313,55 @@ static void render_check(VkImage image, const char *tag) {
     vkFreeMemory(g_device, memory, NULL);
 }
 
+static void buffer_import_test(int fd, const char *tag) {
+    VkExternalMemoryBufferCreateInfo ext = {0};
+    ext.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+    ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    VkBufferCreateInfo bci = {0};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.pNext = &ext;
+    bci.size = IMAGE_SIZE;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkResult r = vkCreateBuffer(g_device, &bci, NULL, &buffer);
+    P("PROBE-BUF-CREATE %s result=%d", tag, r);
+    if (r != VK_SUCCESS) return;
+
+    VkMemoryRequirements req = {0};
+    vkGetBufferMemoryRequirements(g_device, buffer, &req);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_phys, &mp);
+    int index = -1;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if (req.memoryTypeBits & (1u << i)) { index = (int)i; break; }
+    }
+    P("PROBE-BUF-REQ %s size=%llu bits=0x%x type=%d", tag,
+      (unsigned long long)req.size, req.memoryTypeBits, index);
+
+    VkMemoryDedicatedAllocateInfo dedicated = {0};
+    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+    dedicated.buffer = buffer;
+    VkImportMemoryFdInfoKHR import = {0};
+    import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+    import.pNext = &dedicated;
+    import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    import.fd = fd;
+    VkMemoryAllocateInfo ai = {0};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.pNext = &import;
+    ai.allocationSize = align_up(req.size, 4096);
+    ai.memoryTypeIndex = (uint32_t)(index < 0 ? 0 : index);
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    r = vkAllocateMemory(g_device, &ai, NULL, &memory);
+    P("PROBE-BUF-IMPORT %s result=%d", tag, r);
+    if (r == VK_SUCCESS) {
+        r = vkBindBufferMemory(g_device, buffer, memory, 0);
+        P("PROBE-BUF-BIND %s result=%d", tag, r);
+    }
+    vkDestroyBuffer(g_device, buffer, NULL);
+}
+
 int main(void) {
     char ctx[128] = {0};
     int n = (int)readlink("/proc/self/attr/current", ctx, sizeof(ctx) - 1);
@@ -344,7 +371,7 @@ int main(void) {
 
     VkApplicationInfo app = {0};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.pApplicationName = "dmaheap-probe";
+    app.pApplicationName = "dmaheap-probe2";
     app.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo ici = {0};
     ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -366,22 +393,13 @@ int main(void) {
       VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
       VK_API_VERSION_PATCH(props.apiVersion), props.driverVersion, props.vendorID);
 
-    int has_dmabuf = has_ext(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
-    int has_drmmod = has_ext("VK_EXT_image_drm_format_modifier");
-    int has_ahb = has_ext("VK_ANDROID_external_memory_android_hardware_buffer");
-    int has_host = has_ext("VK_EXT_external_memory_host");
+    const char *ext_names[] = {"VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier",
+                               "VK_ANDROID_external_memory_android_hardware_buffer",
+                               "VK_EXT_external_memory_host"};
+    int have[4];
+    for (int i = 0; i < 4; i++) have[i] = has_ext(ext_names[i]);
     P("PROBE-EXT dma_buf=%d drm_modifier=%d ahb=%d external_host=%d",
-      has_dmabuf, has_drmmod, has_ahb, has_host);
-
-    if (has_host) {
-        VkPhysicalDeviceExternalMemoryHostPropertiesEXT hp = {0};
-        hp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
-        VkPhysicalDeviceProperties2 p2 = {0};
-        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        p2.pNext = &hp;
-        vkGetPhysicalDeviceProperties2(g_phys, &p2);
-        P("PROBE-HOST-PTR minAlign=%llu", (unsigned long long)hp.minImportedHostPointerAlignment);
-    }
+      have[0], have[1], have[2], have[3]);
 
     uint32_t qn = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(g_phys, &qn, NULL);
@@ -398,24 +416,45 @@ int main(void) {
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
 
-    const char *exts[4];
-    uint32_t ext_count = 0;
-    if (has_dmabuf) exts[ext_count++] = VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
-    if (has_drmmod) exts[ext_count++] = "VK_EXT_image_drm_format_modifier";
+    // Enable everything the real gfxstream host device enables for this feature set.
+    const char *enabled[4];
+    uint32_t enabled_count = 0;
+    for (int i = 0; i < 4; i++)
+        if (have[i]) enabled[enabled_count++] = ext_names[i];
     VkPhysicalDeviceFeatures features = {0};
     VkDeviceCreateInfo dci = {0};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = ext_count;
-    dci.ppEnabledExtensionNames = exts;
+    dci.enabledExtensionCount = enabled_count;
+    dci.ppEnabledExtensionNames = enabled;
     dci.pEnabledFeatures = &features;
     r = vkCreateDevice(g_phys, &dci, NULL, &g_device);
-    P("PROBE-DEVICE-CREATE result=%d", r);
+    P("PROBE-DEVICE-CREATE result=%d exts=%u", r, enabled_count);
     if (r != VK_SUCCESS) return 0;
     vkGetDeviceQueue(g_device, g_queue_family, 0, &g_queue);
 
-    // Capability query for the exact tuple zink uses.
+    // Advertised DRM modifier list for this format/usage.
+    VkDrmFormatModifierPropertiesListEXT mod_list = {0};
+    mod_list.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT;
+    VkFormatProperties2 fmt_props = {0};
+    fmt_props.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+    fmt_props.pNext = &mod_list;
+    vkGetPhysicalDeviceFormatProperties2(g_phys, VK_FORMAT_B8G8R8A8_UNORM, &fmt_props);
+    P("PROBE-MODLIST count=%u", mod_list.drmFormatModifierCount);
+    if (mod_list.drmFormatModifierCount) {
+        VkDrmFormatModifierPropertiesEXT *mods = calloc(mod_list.drmFormatModifierCount, sizeof(*mods));
+        mod_list.pDrmFormatModifierProperties = mods;
+        vkGetPhysicalDeviceFormatProperties2(g_phys, VK_FORMAT_B8G8R8A8_UNORM, &fmt_props);
+        for (uint32_t i = 0; i < mod_list.drmFormatModifierCount && i < 8; i++) {
+            P("PROBE-MODLIST[%u] modifier=0x%llx planes=%u tiling=0x%x", i,
+              (unsigned long long)mods[i].drmFormatModifier, mods[i].drmFormatModifierPlaneCount,
+              mods[i].drmFormatModifierTilingFeatures);
+        }
+        free(mods);
+    }
+
+    // Exact tuple query zink uses.
     VkPhysicalDeviceImageDrmFormatModifierInfoEXT mod = {0};
     mod.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT;
     mod.drmFormatModifier = 0;
@@ -443,30 +482,30 @@ int main(void) {
       ext_props.externalMemoryProperties.compatibleHandleTypes);
 
     uint64_t need = align_up(IMAGE_SIZE, 4096);
-    const char *heap_paths[] = {"/dev/dma_heap/system", "/dev/dma_heap/system-uncached"};
-    for (unsigned i = 0; i < 2; i++) {
-        int fd = make_heap_fd(heap_paths[i], need);
-        if (fd < 0) continue;
+    int heap_fd = make_heap_fd("/dev/dma_heap/system", need);
+    if (heap_fd >= 0) buffer_import_test(heap_fd, "heap-system");
+
+    struct create_variant variants[] = {
+        {"flat",        0,                        0, 1, IMAGE_SIZE, USAGE},
+        {"mutable",     VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, IMAGE_SIZE, USAGE},
+        {"mutable-sz0", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, 0,         USAGE},
+        {"mutable-list",VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 0, 0,         USAGE},
+        {"flat-list",   0,                        0, 0, 0,                   USAGE},
+        {"mutable-u17", VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, 1, 1, IMAGE_SIZE,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+    };
+    for (unsigned i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
         VkImage image = VK_NULL_HANDLE;
-        const char *tag = i == 0 ? "heap-system" : "heap-uncached";
-        if (create_image(&image, tag) == VK_SUCCESS) {
-            if (import_image(fd, image, tag) == VK_SUCCESS) render_check(image, tag);
-            vkDestroyImage(g_device, image, NULL);
+        if (create_image(&variants[i], &image) != VK_SUCCESS) continue;
+        if (heap_fd >= 0) {
+            VkResult ir = import_image(heap_fd, image, variants[i].tag);
+            if (ir == VK_SUCCESS) render_check(image, variants[i].tag);
         }
-        close(fd);
+        vkDestroyImage(g_device, image, NULL);
     }
 
-    int udma = make_udmabuf_fd(need);
-    if (udma >= 0) {
-        VkImage image = VK_NULL_HANDLE;
-        if (create_image(&image, "udmabuf") == VK_SUCCESS) {
-            if (import_image(udma, image, "udmabuf") == VK_SUCCESS) render_check(image, "udmabuf");
-            vkDestroyImage(g_device, image, NULL);
-        }
-        close(udma);
-    }
-
-    vkDeviceWaitIdle(g_device);
+    if (heap_fd >= 0) close(heap_fd);
     P("PROBE-DONE");
     return 0;
 }
