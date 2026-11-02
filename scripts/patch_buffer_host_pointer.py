@@ -266,20 +266,33 @@ cpp.write_text(text, encoding='utf-8', newline='')
 #     dispatch entry for vkGetMemoryHostPointerPropertiesEXT is null (observed as a
 #     pc=0 crash inside allocExternalMemory) and host-pointer imports are illegal.
 text = cpp.read_text(encoding='utf-8')
-OLD = '''#if defined(__linux__)
+patched_block = '''#if defined(__linux__)
+    if (emulation->mDeviceInfo.supportsDmaBuf) {
+        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+        if (vk_util::extensionSupported(emulation->mDeviceInfo.extensions,
+                                        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)) {
+            selectedDeviceExtensionNames.emplace(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+        }
+    }
+#endif
+'''
+plain_block = '''#if defined(__linux__)
     if (emulation->mDeviceInfo.supportsDmaBuf) {
         selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
     }
 #endif
 '''
-NEW = OLD + '''
+host_block = '''
     if (emulation->mDeviceInfo.supportsExternalMemoryHostProps) {
         selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     }
 '''
-if text.count(OLD) != 1:
-    raise SystemExit(f'expected one device extension anchor, found {text.count(OLD)}')
-text = text.replace(OLD, NEW)
+if text.count(patched_block) == 1:
+    text = text.replace(patched_block, patched_block + host_block, 1)
+elif text.count(plain_block) == 1:
+    text = text.replace(plain_block, plain_block + host_block, 1)
+else:
+    raise SystemExit('expected one device extension anchor (patched or plain)')
 cpp.write_text(text, encoding='utf-8', newline='')
 
 # 12) Guest buffer import: prefer the recorded host pointer over any fd/AHB handle.
