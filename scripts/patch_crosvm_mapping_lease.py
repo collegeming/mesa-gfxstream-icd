@@ -104,6 +104,33 @@ def patch(root):
 
     p.write_text(s, encoding='utf-8')
     changes[str(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
+
+    # Mapping the same BAR offset again means the previous owner's node was freed but its UNMAP
+    # has not been processed. Leaving the stale registration in place makes the new blob share
+    # or inherit a backing whose owner is gone; the guest can end up reading an aperture that
+    # nothing backs (0xff reads, dropped writes). Replace the stale registration.
+    pci = root / 'devices/src/virtio/virtio_pci_device.rs'
+    s = pci.read_text(encoding='utf-8')
+    old_pci = '''        let (id, gunyah_handle) = self
+            .vm_memory_client
+            .register_memory_for_blob('''
+    new_pci = '''        if let Some(previous_id) = self.mappings.remove(&offset) {
+            base::warn!(
+                "CIB1-DIAG-CROSVM-MAPBLOB: offset={:#x} replaces mapping id={}; unregistering the stale owner",
+                offset,
+                previous_id
+            );
+            self.vm_memory_client
+                .unregister_memory(previous_id)
+                .context("unregister_memory (stale offset owner) failed")?;
+        }
+
+        let (id, gunyah_handle) = self
+            .vm_memory_client
+            .register_memory_for_blob('''
+    s = replace(s, old_pci, new_pci)
+    pci.write_text(s, encoding='utf-8')
+    changes[str(pci)] = hashlib.sha256(pci.read_bytes()).hexdigest()
     return changes
 
 

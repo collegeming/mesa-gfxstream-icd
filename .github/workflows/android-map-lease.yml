@@ -283,6 +283,9 @@ jobs:
           assert dev.count('offset_taken_over') == 2
           assert 'blob_detach::detach(' in dev
           assert 'resource.shmem_offset = Some(offset);' in dev
+          pci = Path('source/devices/src/virtio/virtio_pci_device.rs').read_text()
+          assert pci.count('CIB1-DIAG-CROSVM-MAPBLOB') == 1
+          assert pci.count('replaces mapping id') == 1
           PY
           git -C source diff --check
           cd source
