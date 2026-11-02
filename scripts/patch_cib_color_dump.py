@@ -58,7 +58,10 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                         std::lock_guard<std::mutex> lock(mMutex);
                         for (auto& entry : mImageInfo) {
                             const auto& img = entry.second;
-                            if (img.classicImageResource && img.classicImageBound) {
+                            // Dump every CIB1 image, not only the ones the host
+                            // marked bound: the compositor's output may be an alias
+                            // whose bind flag is not recorded here.
+                            if (img.classicImageResource) {
                                 resources.push_back(img.classicImageResource);
                             }
                         }
@@ -69,8 +72,11 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                     for (uint32_t resource : resources) {
                         std::vector<uint8_t> bytes;
                         if (!m_vkEmulation->readColorBufferToBytes(resource, &bytes)) {
+                            GFXSTREAM_WARNING("CIB-DUMP: resource %u readback failed", resource);
                             continue;
                         }
+                        GFXSTREAM_WARNING("CIB-DUMP: resource %u readback %zu bytes", resource,
+                                          bytes.size());
                         char path[128];
                         snprintf(path, sizeof(path), "/data/local/tmp/cib-%u.rgba", resource);
                         int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
