@@ -3,7 +3,7 @@ name: build-droidvm-mali-host
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/niri-cib-ring-ping-trace]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/niri-cib-ring-ping-trace, diagnostic/ring-arm-check]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GFXSTREAM_COMMIT: cbc6df3b11b3eac8fb13d89e0a542f763b3bdfcc
+  GFXSTREAM_COMMIT: 30f8df65c11f4fcc8b44798b6df1a172fcd88b00
   VULKAN_HEADERS_TAG_OBJECT: 43711cfe7d642355a20af7c0a850ef4de88bcb60
   VULKAN_HEADERS_COMMIT: 11d6898377797e07dbd543aaaa367e4465074597
 
