@@ -574,8 +574,13 @@ static void ahb_buffer_test(void) {
         memset(host, 0, 4096);
         VkMemoryHostPointerPropertiesEXT hpProps = {0};
         hpProps.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
-        vkGetMemoryHostPointerPropertiesEXT(
-            g_device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, host, &hpProps);
+        PFN_vkGetMemoryHostPointerPropertiesEXT pfnHostProps =
+            (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
+                g_device, "vkGetMemoryHostPointerPropertiesEXT");
+        if (pfnHostProps) {
+            pfnHostProps(g_device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, host,
+                         &hpProps);
+        }
         uint32_t hpType = 0xffffffffu;
         for (uint32_t i = 0; i < 32; i++) {
             if (hpProps.memoryTypeBits & (1u << i)) { hpType = i; break; }
