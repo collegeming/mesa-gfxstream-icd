@@ -145,6 +145,19 @@ def patch(root):
     }
 '''
     s = replace(s, old_map, new_map)
+
+    old_share = '''                let (slot, accept_handle) = match vm.runtime_share('''
+    new_share = '''                if std::env::var_os("GFXSTREAM_NIRI_IMAGE_TRACE").as_deref()
+                    == Some(std::ffi::OsStr::new("1"))
+                {
+                    base::warn!(
+                        "CIB1-DIAG-CROSVM-MAPREGION: fallback guest={:#x} size={:#x}",
+                        guest_addr.offset(),
+                        size
+                    );
+                }
+                let (slot, accept_handle) = match vm.runtime_share('''
+    s = replace(s, old_share, new_share)
     vmc.write_text(s, encoding='utf-8')
     changes[str(vmc)] = hashlib.sha256(vmc.read_bytes()).hexdigest()
 
