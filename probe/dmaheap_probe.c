@@ -21,6 +21,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <android/hardware_buffer.h>
 #include <vulkan/vulkan.h>
 
 struct dma_heap_allocation_data {
@@ -432,6 +433,92 @@ static void host_pointer_test(void) {
     free(host);
 }
 
+
+// Can the host allocate a buffer-shaped AHB itself (BLOB + GPU_DATA_BUFFER) and
+// import it into Mali for a VkBuffer? This is the non-export alternative for the
+// guest's classic buffer memory: Mali cannot export to AHB, but it can import.
+static void ahb_buffer_test(void) {
+    if (!has_ext("VK_ANDROID_external_memory_android_hardware_buffer")) {
+        P("PROBE-AHB-BUF skipped (no AHB extension)");
+        return;
+    }
+    AHardwareBuffer_Desc desc = {0};
+    desc.width = 4096;
+    desc.height = 1;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_BLOB;
+    desc.usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
+                 AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+    AHardwareBuffer* ahb = NULL;
+    int ahbRes = AHardwareBuffer_allocate(&desc, &ahb);
+    P("PROBE-AHB-BUF-ALLOC result=%d ahb=%p", ahbRes, (void*)ahb);
+    if (ahbRes != 0 || !ahb) return;
+
+    VkAndroidHardwareBufferPropertiesANDROID props = {0};
+    props.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+    VkResult r = vkGetAndroidHardwareBufferPropertiesANDROID(g_device, ahb, &props);
+    P("PROBE-AHB-BUF-PROPS result=%d bits=0x%x allocSize=%llu", r, props.memoryTypeBits,
+      (unsigned long long)props.allocationSize);
+
+    VkExternalMemoryBufferCreateInfo ext = {0};
+    ext.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+    ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    VkBufferCreateInfo bci = {0};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.pNext = &ext;
+    bci.size = 4096;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    r = vkCreateBuffer(g_device, &bci, NULL, &buffer);
+    P("PROBE-AHB-BUF-CREATE result=%d", r);
+    if (r != VK_SUCCESS) { AHardwareBuffer_release(ahb); return; }
+
+    VkMemoryRequirements req = {0};
+    vkGetBufferMemoryRequirements(g_device, buffer, &req);
+    P("PROBE-AHB-BUF-REQ size=%llu bits=0x%x", (unsigned long long)req.size, req.memoryTypeBits);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_phys, &mp);
+    int chosen = -1;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((req.memoryTypeBits & props.memoryTypeBits & (1u << i)) != 0) {
+            if (chosen < 0) chosen = (int)i;
+            P("PROBE-AHB-BUF-MEMTYPE index=%u flags=0x%x", i, mp.memoryTypes[i].propertyFlags);
+        }
+    }
+    P("PROBE-AHB-BUF-CHOSEN index=%d", chosen);
+
+    if (chosen >= 0) {
+        VkImportAndroidHardwareBufferInfoANDROID imp = {0};
+        imp.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+        imp.buffer = ahb;
+        VkMemoryAllocateInfo ai = {0};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.pNext = &imp;
+        ai.allocationSize = props.allocationSize;
+        ai.memoryTypeIndex = (uint32_t)chosen;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        r = vkAllocateMemory(g_device, &ai, NULL, &memory);
+        P("PROBE-AHB-BUF-IMPORT result=%d", r);
+        if (r == VK_SUCCESS) {
+            r = vkBindBufferMemory(g_device, buffer, memory, 0);
+            P("PROBE-AHB-BUF-BIND result=%d", r);
+            void* mapped = NULL;
+            r = vkMapMemory(g_device, memory, 0, 4096, 0, &mapped);
+            P("PROBE-AHB-BUF-MAP result=%d ptr=%p", r, mapped);
+            if (r == VK_SUCCESS) {
+                ((unsigned char*)mapped)[0] = 0xAB;
+                ((unsigned char*)mapped)[1] = 0xCD;
+                P("PROBE-AHB-BUF-PIXELS %u,%u (expect 171,205)", ((unsigned char*)mapped)[0],
+                  ((unsigned char*)mapped)[1]);
+                vkUnmapMemory(g_device, memory);
+            }
+        }
+    }
+    vkDestroyBuffer(g_device, buffer, NULL);
+    AHardwareBuffer_release(ahb);
+}
+
 int main(void) {
     char ctx[128] = {0};
     int n = (int)readlink("/proc/self/attr/current", ctx, sizeof(ctx) - 1);
@@ -578,6 +665,7 @@ int main(void) {
     }
 
     host_pointer_test();
+    ahb_buffer_test();
 
     P("PROBE-DONE");
     return 0;
