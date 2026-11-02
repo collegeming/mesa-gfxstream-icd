@@ -512,30 +512,45 @@ static void ahb_buffer_test(void) {
     }
     P("PROBE-AHB-BUF-CHOSEN index=%d", chosen);
 
-    if (chosen >= 0) {
+    // The driver reports DEDICATED_ONLY for AHB buffers and the AHB's memory type
+    // (0x2) is outside the buffer's requirements (0x4100), so the spec-valid
+    // intersection is empty. Still try both import shapes with the AHB's own type
+    // and report what the driver actually does: a vendor may accept the bind.
+    uint32_t ahbType = 0;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (props.memoryTypeBits & (1u << i)) { ahbType = i; break; }
+    }
+    for (int dedicated = 0; dedicated <= 1; dedicated++) {
+        VkMemoryDedicatedAllocateInfo ded = {0};
+        ded.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        ded.buffer = buffer;
         VkImportAndroidHardwareBufferInfoANDROID imp = {0};
         imp.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+        imp.pNext = dedicated ? (void*)&ded : NULL;
         imp.buffer = ahb;
         VkMemoryAllocateInfo ai = {0};
         ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         ai.pNext = &imp;
         ai.allocationSize = props.allocationSize;
-        ai.memoryTypeIndex = (uint32_t)chosen;
+        ai.memoryTypeIndex = ahbType;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         r = vkAllocateMemory(g_device, &ai, NULL, &memory);
-        P("PROBE-AHB-BUF-IMPORT result=%d", r);
+        P("PROBE-AHB-BUF-IMPORT %s dedicated=%d type=%u result=%d", kUsages[u].tag,
+          dedicated, ahbType, r);
         if (r == VK_SUCCESS) {
             r = vkBindBufferMemory(g_device, buffer, memory, 0);
-            P("PROBE-AHB-BUF-BIND result=%d", r);
-            void* mapped = NULL;
-            r = vkMapMemory(g_device, memory, 0, 4096, 0, &mapped);
-            P("PROBE-AHB-BUF-MAP result=%d ptr=%p", r, mapped);
+            P("PROBE-AHB-BUF-BIND %s dedicated=%d result=%d", kUsages[u].tag, dedicated, r);
             if (r == VK_SUCCESS) {
-                ((unsigned char*)mapped)[0] = 0xAB;
-                ((unsigned char*)mapped)[1] = 0xCD;
-                P("PROBE-AHB-BUF-PIXELS %u,%u (expect 171,205)", ((unsigned char*)mapped)[0],
-                  ((unsigned char*)mapped)[1]);
-                vkUnmapMemory(g_device, memory);
+                void* mapped = NULL;
+                r = vkMapMemory(g_device, memory, 0, 4096, 0, &mapped);
+                P("PROBE-AHB-BUF-MAP %s dedicated=%d result=%d ptr=%p", kUsages[u].tag,
+                  dedicated, r, mapped);
+                if (r == VK_SUCCESS) {
+                    ((unsigned char*)mapped)[0] = 0xAB;
+                    P("PROBE-AHB-BUF-PIXELS %s %u (expect 171)", kUsages[u].tag,
+                      ((unsigned char*)mapped)[0]);
+                    vkUnmapMemory(g_device, memory);
+                }
             }
         }
     }
