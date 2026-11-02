@@ -202,6 +202,69 @@ def patch(root):
     s = replace(s, old_pci, new_pci)
     pci.write_text(s, encoding='utf-8')
     changes[str(pci)] = hashlib.sha256(pci.read_bytes()).hexdigest()
+    # Explain the missing prepared region: the prepare call's completion and the handler's own
+    # should_prepare/enable state, plus whether the region was inserted.
+    pci = root / 'devices/src/virtio/virtio_pci_device.rs'
+    s = pci.read_text(encoding='utf-8')
+    s = s.replace("""            self.prepared = true;
+        }
+
+        // Quarantine before the request: no error, including a lost reply, proves absence.""",
+"""            self.prepared = true;
+            base::warn!(
+                "CIB1-DIAG-CROSVM-MAPPREP: prepare path completed alloc={:?}",
+                self.alloc
+            );
+        }
+
+        // Quarantine before the request: no error, including a lost reply, proves absence.""", 1)
+    pci.write_text(s, encoding='utf-8')
+    changes[str(pci)] = hashlib.sha256(pci.read_bytes()).hexdigest()
+
+    vmc2 = root / 'vm_control/src/lib.rs'
+    s = vmc2.read_text(encoding='utf-8')
+    old_prep_req = """                if !sys::should_prepare_memory_region() {
+                    return VmMemoryResponse::Ok;
+                }"""
+    new_prep_req = """                base::warn!(
+                    "CIB1-DIAG-CROSVM-MAPPREP: prepare request alloc={:?} should={}",
+                    alloc,
+                    sys::should_prepare_memory_region()
+                );
+                if !sys::should_prepare_memory_region() {
+                    return VmMemoryResponse::Ok;
+                }"""
+    s = replace(s, old_prep_req, new_prep_req)
+    old_prep_res = """                match sys::prepare_shared_memory_region(vm, sys_allocator, alloc, cache) {
+                    Ok(region) => {
+                        region_state.mapped_regions.insert(alloc, region);
+                        VmMemoryResponse::Ok
+                    }
+                    Err(e) => VmMemoryResponse::Err(e),
+                }"""
+    new_prep_res = """                match sys::prepare_shared_memory_region(vm, sys_allocator, alloc, cache) {
+                    Ok(region) => {
+                        base::warn!(
+                            "CIB1-DIAG-CROSVM-MAPPREP: prepared alloc={:?} slot={}",
+                            alloc,
+                            region.slot
+                        );
+                        region_state.mapped_regions.insert(alloc, region);
+                        VmMemoryResponse::Ok
+                    }
+                    Err(e) => {
+                        base::error!(
+                            "CIB1-DIAG-CROSVM-MAPPREP: prepare FAILED alloc={:?}: {:?}",
+                            alloc,
+                            e
+                        );
+                        VmMemoryResponse::Err(e)
+                    }
+                }"""
+    s = replace(s, old_prep_res, new_prep_res)
+    vmc2.write_text(s, encoding='utf-8')
+    changes[str(vmc2)] = hashlib.sha256(vmc2.read_bytes()).hexdigest()
+
     return changes
 
 
