@@ -280,7 +280,9 @@ jobs:
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
           grep -q 'COHERENT-DOWNGRADE-ALLOW-IMPORT' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py out/
+          python3 -I ci/scripts/patch_guest_handle_without_external_blob.py source
+          grep -q 'STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE' source/host/virtio_gpu_resource.cpp
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
