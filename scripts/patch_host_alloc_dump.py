@@ -83,8 +83,7 @@ if anchor not in text:
 # Insert the helper before the first anonymous namespace end is impractical; put it
 # right before VkDecoderGlobalState::on_vkCreateImage definition.
 if '#include <utility>' not in text:
-    text = text.replace('#include <vector>', '#include <utility>
-#include <vector>', 1)
+    text = text.replace('#include <vector>', '#include <utility>\n#include <vector>', 1)
 idx = text.index(anchor)
 text = text[:idx] + helper + text[idx:]
 
