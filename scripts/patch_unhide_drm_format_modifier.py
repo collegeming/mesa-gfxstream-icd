@@ -21,10 +21,13 @@ OLD = '''        static const char* const kGuestHiddenDeviceExtensions[] = {
             VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
         };
 '''
-NEW = '''        // Mali: expose the extension instead of hiding it. The guest's emulated form is a
-        // plain VK_IMAGE_TILING_LINEAR external DMA_BUF image, which this driver rejects; the
-        // explicit LINEAR modifier plus plane layout is the shape it accepts.
-        static const char* const kGuestHiddenDeviceExtensions[] = {};
+NEW = '''        // Mali: keep the extension visible. The guest's emulated form is a plain
+        // VK_IMAGE_TILING_LINEAR external DMA_BUF image, which this driver rejects; the explicit
+        // LINEAR modifier plus plane layout is the shape it accepts. The sentinel keeps the
+        // filtering path (and its ycbcr/protected additions) active while hiding nothing.
+        static const char* const kGuestHiddenDeviceExtensions[] = {
+            "__droidvm_never_hidden_extension",
+        };
 '''
 if text.count(OLD) != 1:
     raise SystemExit(f'expected one hidden-extension anchor, found {text.count(OLD)}')
