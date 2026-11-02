@@ -60,10 +60,10 @@ if text.count(OLD) != 1:
 text = text.replace(OLD, NEW)
 
 # 3a) Mark buffer allocations from setupVkBuffer, dedicated or not.
-OLD = 'bool VkEmulation::setupVkBuffer('
+OLD = 'bool VkEmulation::allocExternalMemory('
 NEW = '''static thread_local bool tBufferHostPointerAlloc = false;
 
-bool VkEmulation::setupVkBuffer('''
+bool VkEmulation::allocExternalMemory('''
 if text.count(OLD) != 1:
     raise SystemExit(f'expected one setupVkBuffer anchor, found {text.count(OLD)}')
 text = text.replace(OLD, NEW)
