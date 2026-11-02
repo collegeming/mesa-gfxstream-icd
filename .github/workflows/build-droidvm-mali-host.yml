@@ -278,7 +278,9 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py out/
+          python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
+          grep -q 'COHERENT-DOWNGRADE-ALLOW-IMPORT' source/host/vulkan/vk_decoder_global_state.cpp
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
