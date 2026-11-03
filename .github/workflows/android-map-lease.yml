@@ -357,3 +357,85 @@ jobs:
           name: crosvm-map-lease-${{ github.run_id }}
           path: evidence/
           retention-days: 14
+
+  # Host-target regression tests for the blob mapping lifetime contract. The Android job cannot
+  # run tests for an aarch64-linux-android target on an x86 runner, so the same patch series is
+  # applied to the same pinned source and the targeted tests run on the host target.
+  host-lifetime-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CROSVM_COMMIT: 849e05f12d5c8d4c36af8e15763986d242cd43b5
+      MINIJAIL_COMMIT: 8330e01d0fd55dfe505890eb5f829b77ac4ca8cb
+      RUSTUP_TOOLCHAIN: 1.90.0
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - name: Checkout this revision for patch provenance
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: trace-patches
+          persist-credentials: false
+      - name: Checkout pinned production crosvm source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/crosvm
+          ref: ${{ env.CROSVM_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Materialize minijail beside the source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: google/minijail
+          ref: ${{ env.MINIJAIL_COMMIT }}
+          path: minijail
+          persist-credentials: false
+      - name: Checkout the tested paired detach and lease patches
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: collegeming/mesa-gfxstream-icd
+          ref: 8b193b4fd5211134b3cdae224157fe93a99fccef
+          path: pair-patches
+          persist-credentials: false
+      - name: Install host build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libcap-dev libclang-dev libwayland-dev wayland-protocols libdrm-dev libgbm-dev libegl1-mesa-dev libxkbcommon-dev protobuf-compiler libssl-dev pkg-config ninja-build
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Restore Cargo registry and host build outputs
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: crosvm-host-lifetime-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-${{ github.sha }}
+          restore-keys: |
+            crosvm-host-lifetime-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-
+      - name: Apply the exact patch series
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$CROSVM_COMMIT"
+          python3 -I pair-patches/scripts/patch_crosvm_native_detach.py "$GITHUB_WORKSPACE/source"
+          python3 -I pair-patches/scripts/patch_crosvm_native_lease.py "$GITHUB_WORKSPACE/source"
+          python3 -I trace-patches/scripts/patch_crosvm_mapping_lease.py "$GITHUB_WORKSPACE/source"
+          git -C source diff --check
+      - name: Run blob mapping lifetime tests on the host
+        working-directory: ${{ github.workspace }}/source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +"$RUSTUP_TOOLCHAIN" test -p devices --no-default-features --features gpu blob_context -- --nocapture
+      - name: Save Cargo registry and host build outputs
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/target
+          key: crosvm-host-lifetime-${{ runner.os }}-${{ env.CROSVM_COMMIT }}-${{ env.MINIJAIL_COMMIT }}-rust190-${{ github.sha }}
