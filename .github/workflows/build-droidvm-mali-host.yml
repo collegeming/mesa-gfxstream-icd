@@ -315,13 +315,15 @@ jobs:
           fi
           python3 -I ci/scripts/patch_cib_color_dump.py source
           grep -q 'GFXSTREAM_CIB_DUMP_REQUEST' source/host/vulkan/vk_decoder_global_state.cpp
+          python3 -I ci/scripts/patch_cib_fdscan.py source
+          grep -q 'dupAllGuestBlobResourceDescriptors' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_copy_diag.py source
           grep -q 'COPY-IMG2BUF' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_import_fd_dump.py source
           grep -q 'GFXSTREAM_DUMP_IMPORT_FD' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_host_alloc_dump.py source
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
           fi
