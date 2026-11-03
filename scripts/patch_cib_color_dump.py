@@ -22,7 +22,9 @@ text = d.read_text(encoding='utf-8')
 
 for inc, anchor in [('#include <thread>', '#include <mutex>\n'),
                     ('#include <chrono>', '#include <thread>\n'),
-                    ('#include <map>', '#include <chrono>\n')]:
+                    ('#include <map>', '#include <chrono>\n'),
+                    ('#include <sys/mman.h>', '#include <unistd.h>\n'),
+                    ('#include <cerrno>', '#include <sys/mman.h>\n')]:
     if inc not in text:
         if text.count(anchor) != 1:
             raise SystemExit(f'missing include anchor {anchor!r}')
@@ -54,6 +56,7 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                     if (!requested) return;
                     GFXSTREAM_WARNING("CIB-DUMP: round %d requested", round);
                     std::vector<uint32_t> resources;
+                    std::map<uint32_t, uint32_t> resourceWidths;
                     {
                         std::lock_guard<std::mutex> lock(mMutex);
                         for (auto& entry : mImageInfo) {
@@ -63,6 +66,8 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                             // whose bind flag is not recorded here.
                             if (img.classicImageResource) {
                                 resources.push_back(img.classicImageResource);
+                                resourceWidths[img.classicImageResource] =
+                                    img.imageCreateInfoShallow.extent.width;
                             }
                         }
                     }
@@ -84,6 +89,43 @@ NEW = '''        mMemoryInfo[memory] = std::move(info);
                             ssize_t written = write(fd, bytes.data(), bytes.size());
                             (void)written;
                             close(fd);
+                        }
+                        // On-request ColorBuffer -> guest scanout writeback. The guest's
+                        // KMS/GBM buffer is not the host ColorBuffer; copy the rendered
+                        // frame into the guest blob's own dma-buf pages so fb0, crosvm
+                        // and the compositor's screenshot read the same pixels.
+                        if (getenv("GFXSTREAM_CIB_WRITEBACK")) {
+                            const uint32_t width = resourceWidths[resource];
+                            // The readback rows are width*bpp (bpp=4 here); the guest
+                            // stride is AlignUp(width*bpp, 16). Only widths that make
+                            // those equal can be copied as one contiguous block.
+                            if (width == 0 || (width & 3) != 0) {
+                                GFXSTREAM_WARNING(
+                                    "CIB-WRITEBACK: resource %u skip width=%u", resource, width);
+                            } else {
+                                int wbFd = ExternalObjectManager::get()
+                                               ->dupGuestBlobResourceDescriptor(resource);
+                                if (wbFd < 0) {
+                                    GFXSTREAM_WARNING(
+                                        "CIB-WRITEBACK: resource %u no guest fd", resource);
+                                } else {
+                                    void* wbDst = mmap(nullptr, bytes.size(),
+                                                       PROT_READ | PROT_WRITE, MAP_SHARED,
+                                                       wbFd, 0);
+                                    if (wbDst == MAP_FAILED) {
+                                        GFXSTREAM_WARNING(
+                                            "CIB-WRITEBACK: resource %u mmap failed errno=%d",
+                                            resource, errno);
+                                    } else {
+                                        memcpy(wbDst, bytes.data(), bytes.size());
+                                        munmap(wbDst, bytes.size());
+                                        GFXSTREAM_WARNING(
+                                            "CIB-WRITEBACK: resource %u width=%u bytes=%zu ok",
+                                            resource, width, bytes.size());
+                                    }
+                                    close(wbFd);
+                                }
+                            }
                         }
                     }
                     GFXSTREAM_WARNING("CIB-DUMP: round %d dumped %zu ColorBuffer(s)",
