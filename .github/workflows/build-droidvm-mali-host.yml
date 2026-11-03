@@ -40,6 +40,7 @@ on:
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
       - 'scripts/*cib_buffer_dmabuf_export*'
+      - 'scripts/*image_view_diag*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -294,6 +295,8 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
           python3 -I ci/scripts/patch_cib_buffer_dmabuf_export.py source
           python3 -I ci/scripts/test_cib_buffer_dmabuf_export.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/cib-buffer-dmabuf-export-tests.txt
+          python3 -I ci/scripts/patch_image_view_diag.py source
+          python3 -I ci/scripts/test_image_view_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/image-view-diag-tests.txt
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
@@ -346,6 +349,7 @@ jobs:
           cp ci/scripts/*niri_cib_buffer_trace* out/
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
           cp ci/scripts/*cib_buffer_dmabuf_export* out/
+          cp ci/scripts/*image_view_diag* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -449,7 +453,8 @@ jobs:
                   "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only",
                   "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change",
                   "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains",
-                  "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior"
+                  "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
+                  "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
