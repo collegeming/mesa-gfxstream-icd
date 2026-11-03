@@ -41,7 +41,7 @@ edit(d, '''        VkResult result = vk->vkCreateImageView(device, pCreateInfo, 
                         "image_device=%p image_mem=%llu mem_found=%d mem_device=%p "
                         "mem_size=%llu mem_index=%u mem_ptr=%p mem_blob=%llu "
                         "fmt=%d tiling=%d usage=0x%x extent=%ux%u view_fmt=%d "
-                        "view_components=%d,%d,%d,%d\\n",
+                        "view_components=%d,%d,%d,%d cb=%d\\n",
                         static_cast<void*>(device), static_cast<void*>(boxed_device),
                         (unsigned long long)pCreateInfo->image,
                         static_cast<void*>(imageInfo->device),
@@ -61,7 +61,8 @@ edit(d, '''        VkResult result = vk->vkCreateImageView(device, pCreateInfo, 
                         imageInfo->imageCreateInfoShallow.extent.height,
                         (int)pCreateInfo->format, (int)pCreateInfo->components.r,
                         (int)pCreateInfo->components.g, (int)pCreateInfo->components.b,
-                        (int)pCreateInfo->components.a);
+                        (int)pCreateInfo->components.a,
+                        imageInfo->boundColorBuffer ? (int)*imageInfo->boundColorBuffer : -1);
                 fflush(stderr);
             }
         }
@@ -74,6 +75,42 @@ edit(d, '''        VkResult result = vk->vkCreateImageView(device, pCreateInfo, 
                         (unsigned long long)*pView);
                 fflush(stderr);
             }
+        }''')
+
+# 1b) The end of the same function: a view that reaches here completed its bookkeeping.
+edit(d, '''        *pView = new_boxed_non_dispatchable_VkImageView(*pView);
+        imageViewInfo.boxed = *pView;
+        return result;''',
+     '''        *pView = new_boxed_non_dispatchable_VkImageView(*pView);
+        imageViewInfo.boxed = *pView;
+        if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+            static std::atomic<uint32_t> sIvDone{0};
+            if (sIvDone.fetch_add(1, std::memory_order_relaxed) < 512) {
+                fprintf(stderr, "IV-DIAG-DONE: view=%llu cb=%d\\n",
+                        (unsigned long long)*pView,
+                        imageViewInfo.boundColorBuffer ? (int)*imageViewInfo.boundColorBuffer : -1);
+                fflush(stderr);
+            }
+        }
+        return result;''')
+
+# 1c) The second driver call in the same function: the debug label.
+edit(d, '''        if (imageViewInfo.boundColorBuffer) {
+            deviceInfo->debugUtilsHelper.addDebugLabel(*pView, "ColorBuffer:%d",
+                                                       *imageViewInfo.boundColorBuffer);
+        }''',
+     '''        if (imageViewInfo.boundColorBuffer) {
+            if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+                static std::atomic<uint32_t> sIvLabel{0};
+                if (sIvLabel.fetch_add(1, std::memory_order_relaxed) < 512) {
+                    fprintf(stderr, "IV-DIAG-LABEL: view=%llu cb=%d enabled=%d\\n",
+                            (unsigned long long)*pView, (int)*imageViewInfo.boundColorBuffer,
+                            (int)deviceInfo->debugUtilsHelper.isEnabled());
+                    fflush(stderr);
+                }
+            }
+            deviceInfo->debugUtilsHelper.addDebugLabel(*pView, "ColorBuffer:%d",
+                                                       *imageViewInfo.boundColorBuffer);
         }''')
 
 # 2) Image destroy.
