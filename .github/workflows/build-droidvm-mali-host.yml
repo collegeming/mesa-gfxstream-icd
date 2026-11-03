@@ -12,7 +12,7 @@ on:
           - no_hostptr
         default: full
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -292,7 +292,8 @@ jobs:
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
-          grep -q 'COHERENT-DOWNGRADE-ALLOW-IMPORT' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'COHERENT-EMULATION-ALLOW' source/host/vulkan/vk_decoder_global_state.cpp
+          ! grep -q 'COHERENT-DOWNGRADE-ALLOW-IMPORT' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_guest_handle_without_external_blob.py source
           grep -q 'STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE' source/host/virtio_gpu_resource.cpp
           HP_MODE="${{ inputs.host_pointer_mode }}"
@@ -430,6 +431,9 @@ jobs:
                   "Shared bounded identity/range/epoch state machine embedded in production; transfer callbacks exercised only by CPU mocks",
                   "Validate exact final-chain host pointer once before driver allocation in decoder and internal aliases; reject null/function/query/type/index/mask mismatch without fallback or borrowed-pointer free",
                   "Unconditional guest HOST_COHERENT to physical noncoherent rejection before backing acquisition, including alias and transformed indices; native coherent and noncoherent remain permitted",
+                  "Alias preflight resolves the ColorBuffer/Buffer stored HOST index in host index space instead of re-mapping it as a guest index",
+                  "Coherent rejection waived only when VulkanDisableCoherentMemoryAndEmulate is enabled, the physical type is HOST_CACHED, and the allocation shape is tracked; no index or flag rewrite",
+                  "Image bind ranges tracked beside buffer ranges; pre-submit flush covers both; post-completion invalidate keyed on the fence the guest waits on",
                   "Bounded CIB1 activation diagnostics only: capset/readiness/query/create metadata, 8 records per site, no driver calls, stores, extra queries or return-value changes",
                   "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed",
                   "Add MUTABLE-only BGRA8/RGBA8 default image-support combos so guest classic BGRA8 ColorBuffers can be created before CIB alias; real native AHB query remains authoritative",
@@ -442,12 +446,21 @@ jobs:
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
               "source_patch": "gfxstream-android-mali.patch (excludes separately pinned Vulkan-Headers replacement)",
               "host_memory_contract": {
-                  "coherent_downgrade": "unconditional reject before backing acquisition; no environment bypass",
-                  "physical_flags": "queried separately from shadow routing flags; never rewritten",
+                  "coherent_downgrade": "reject before backing acquisition unless the emulation waiver applies; no environment bypass",
+                  "emulation_waiver": "true only when VulkanDisableCoherentMemoryAndEmulate is enabled AND the physical type is HOST_CACHED AND the allocation shape is tracked (buffer range or image range); alias stored host indices are resolved in host index space, never re-mapped as guest indices",
+                  "physical_flags": "queried separately from shadow routing flags; never rewritten, never given HOST_COHERENT by this contract",
+                  "memory_type_index": "guest request index is never replaced by the waiver; the alias path keeps using the stored host index for the driver call, as upstream does",
                   "pointer_type": "HOST_ALLOCATION_BIT_EXT only; foreign mapped type not intentionally supported",
                   "pointer_query": "exact final import chain, requested host index unchanged; failed query is never accepted",
                   "ownership": "helper borrows pointer only; private/shared backing RAII retained; local owned fd/pool cleaned on defensive mixed-chain rejection",
                   "native_coherent": "permitted subject to exact import compatibility; masks do not generalize across exporters",
+                  "cache_maintenance": {
+                      "flush": "whole tracked allocations (offset 0, VK_WHOLE_SIZE) before dispatch, buffers and images alike",
+                      "invalidate": "after a fence the driver reports signalled (vkWaitForFences, vkGetFenceStatus), after vkQueueWaitIdle for that queue, and opportunistically after a successful vkWaitSemaphores",
+                      "eligible_memory": "only memory this host mapped itself (vkMapMemory); imported or shared-memory backed allocations are excluded because the mapped-range calls would be invalid on them",
+                      "bound": "64 pending completion records; overflow drops the record and logs instead of invalidating unfinished work",
+                      "gap": "alias ColorBuffer/Buffer imports carry an externally supplied mapped pointer and are therefore allowed by the waiver but not yet cache-maintained; closing that needs a ColorBuffer-side flush/invalidate in VkEmulation. Semaphore-only completion is only drained opportunistically."
+                  },
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['host_memory_contract.h', 'test_host_memory_contract.cpp',
                                           'test_host_memory_integration.py', 'host-memory-contract-tests.txt']}
