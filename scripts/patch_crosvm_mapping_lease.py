@@ -388,6 +388,17 @@ pub(super) fn remove_mapping(
     slot.as_mut().ok_or(())?.remove_mapping(offset).map_err(|_| ())
 }
 
+/// A resource still owns host state when any of these are set. Quarantine means the
+/// registration outcome is unknown, so it must be detached (fail closed), never skipped.
+pub(super) fn blob_state_requires_detach(
+    offset: Option<u64>,
+    renderer_mapped: bool,
+    quarantined: bool,
+    pool_offset: Option<u64>,
+) -> bool {
+    offset.is_some() || renderer_mapped || quarantined || pool_offset.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +521,18 @@ mod tests {
         map.forget_context(9);
         assert_eq!(map.resources_exclusive_to(9), Vec::<u32>::new());
     }
+
+    /// Teardown must never read a quarantined or pooled blob as already detached: both still
+    /// own host/renderer state, and Drop keeps the renderer alive until they are released.
+    #[test]
+    fn teardown_never_skips_a_quarantined_or_pooled_blob() {
+        assert!(!blob_state_requires_detach(None, false, false, None));
+        assert!(blob_state_requires_detach(Some(0x1000), false, false, None));
+        assert!(blob_state_requires_detach(None, true, false, None));
+        assert!(blob_state_requires_detach(None, false, true, None));
+        assert!(blob_state_requires_detach(None, false, false, Some(0x2000)));
+        assert!(blob_state_requires_detach(None, false, true, Some(0x2000)));
+    }
 }
 '''
 
@@ -568,14 +591,15 @@ def patch_lifetime(root, changes):
                 && self.cursor_scanout.resource_id != id
         });
         for resource_id in exclusive {
-            let mapped = self.resources.get(&resource_id).is_some_and(|resource| {
-                blob_detach::active(
+            let needs_teardown = self.resources.get(&resource_id).is_some_and(|resource| {
+                blob_context::blob_state_requires_detach(
                     resource.shmem_offset,
                     resource.rutabaga_external_mapping,
                     resource.mapping_quarantined,
-                ) || resource.pool_offset.is_some()
+                    resource.pool_offset,
+                )
             });
-            if !mapped {
+            if !needs_teardown {
                 continue;
             }
             if let Err(e) = self.detach_blob_mapping(resource_id) {
