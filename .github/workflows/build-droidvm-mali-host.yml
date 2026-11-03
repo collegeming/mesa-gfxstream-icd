@@ -41,6 +41,7 @@ on:
       - 'scripts/*niri_cib_ahb_buffer_fix*'
       - 'scripts/*cib_buffer_dmabuf_export*'
       - 'scripts/*image_view_diag*'
+      - 'scripts/*completion_fence_liveness*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -332,6 +333,8 @@ jobs:
           grep -q 'GFXSTREAM_DUMP_IMPORT_FD' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_host_alloc_dump.py source
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
+          python3 -I ci/scripts/patch_completion_fence_liveness.py source
+          python3 -I ci/scripts/test_completion_fence_liveness.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/completion-fence-liveness-tests.txt
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
@@ -350,6 +353,7 @@ jobs:
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
           cp ci/scripts/*cib_buffer_dmabuf_export* out/
           cp ci/scripts/*image_view_diag* out/
+          cp ci/scripts/*completion_fence_liveness* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
