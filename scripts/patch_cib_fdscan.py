@@ -163,3 +163,31 @@ edit('host/virtio_gpu_resource.cpp',
 
 print('guest blob descriptor registration patched')
 
+# 6) Diagnostic: log the VMM-provided guest handle and every successful
+#    resource Map(), so we can tell a descriptor-less guest blob (os_handle=-1)
+#    from a mapping-backed one that exposes a host VA.
+edit('host/virtio_gpu_resource.cpp',
+     '''        // GUESTBLOB-FD-REGISTER: keep any guest blob descriptor the VMM handed
+        // over, even without the CREATE_GUEST_HANDLE flag, so the scanout
+        // writeback can reach the guest pages.''',
+     '''        // GUESTBLOB-FD-REGISTER: keep any guest blob descriptor the VMM handed
+        // over, even without the CREATE_GUEST_HANDLE flag, so the scanout
+        // writeback can reach the guest pages.
+        GFXSTREAM_WARNING(
+            "GUESTBLOB-HANDLE: resource=%u mem=%u flags=0x%x os_handle=%d",
+            resourceId, createBlobArgs->blob_mem, createBlobArgs->blob_flags,
+            handle ? (int)handle->os_handle : -999);''')
+
+edit('host/virtio_gpu_resource.cpp',
+     '''    if (outAddress) {
+        *outAddress = hva;
+    }''',
+     '''    GFXSTREAM_WARNING("RES-MAP: id=%u hva=%p size=%llu", mId, hva,
+                      (unsigned long long)hvaSize);
+    if (outAddress) {
+        *outAddress = hva;
+    }''')
+
+print('guest handle / resource map diagnostics patched')
+
+
