@@ -11,7 +11,14 @@
 
 using namespace gfxstream::host::vk;
 namespace {
-void check(bool ok) { if (!ok) std::abort(); }
+// A failed expectation names its own source line; a silent abort costs a CI round trip.
+#define check(ok)                                                         \
+    do {                                                                  \
+        if (!(ok)) {                                                      \
+            std::cerr << "FAIL " << __FILE__ << ":" << __LINE__ << '\n';   \
+            std::abort();                                                 \
+        }                                                                 \
+    } while (0)
 int queries = 0, scenarios = 0;
 uint32_t queryBits = 0;
 VkResult queryResult = VK_SUCCESS;
