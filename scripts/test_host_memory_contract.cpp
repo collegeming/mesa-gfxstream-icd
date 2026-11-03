@@ -337,9 +337,10 @@ struct CompletionModel {
 
     void submit(uint64_t fence, const std::vector<uint64_t>& memories, bool hostMapped,
                 bool rangeBound, bool hostPointerImport = false) {
-        // A host-pointer import is maintained regardless of the coherent feature; the Vulkan
-        // path needs both the feature and a mapping this host made itself.
-        const bool eligible = hostPointerImport || (feature && hostMapped && rangeBound);
+        // Both families are maintained in every configuration: the guest is told a cached type
+        // is coherent and never flushes, so the host owes the invalidate whether or not the
+        // coherent feature is switched on.
+        const bool eligible = hostPointerImport || (hostMapped && rangeBound);
         if (!eligible || memories.empty()) return;
         auto it = pending.find(fence);
         if (it == pending.end()) {
@@ -420,9 +421,9 @@ void completionOrderingCase() {
     bounded.queueIdle();
     checkSize(bounded.invalidated.size(), 2);
     check(bounded.pending.empty());
-    // A host-pointer import is recorded and invalidated with the coherent feature off. This is
-    // the current device configuration: the feature is disabled, the guest is told a cached type
-    // is coherent, and only the host can maintain the caches.
+    // Both families are maintained with the coherent feature off. This is the current device
+    // configuration: the feature is disabled, the guest is told a cached type is coherent, and
+    // only the host can maintain the caches.
     CompletionModel noFeature;
     noFeature.feature = false;
     noFeature.submit(1, {7}, false, false, true); // host-pointer import, never vkMapMemory'd
@@ -430,11 +431,13 @@ void completionOrderingCase() {
     noFeature.signal(1);
     noFeature.waitAndInvalidate({1});
     checkSize(noFeature.invalidated.size(), 1);
-    // The same submission without the import flag stays unrecorded with the feature off, so the
-    // Vulkan path can never run without the feature.
+    // A host-mapped, range-bound allocation is recorded and invalidated too: the feature flag
+    // does not gate coverage any more, and the guest cannot flush on its own.
     noFeature.submit(2, {8}, true, true);
-    check(noFeature.pending.empty());
-    checkSize(noFeature.invalidated.size(), 1);
+    checkSize(noFeature.pending.size(), 1);
+    noFeature.signal(2);
+    noFeature.waitAndInvalidate({2});
+    checkSize(noFeature.invalidated.size(), 2);
 }
 }
 int main() {
@@ -477,8 +480,10 @@ int main() {
     // Alias host index regression: the stored host index is never re-mapped as a guest index.
     aliasIndexSpaceCase();
 
-    // Coverage matrix: the waiver needs the feature, a HOST_CACHED physical type and a tracked
-    // shape. Any one missing keeps the allocation rejected.
+    // Coverage matrix: the waiver needs a HOST_CACHED physical type and a tracked shape. The
+    // coherent feature flag is kept as an input for the call sites but no longer gates
+    // coverage: the maintenance runs in every configuration, and requiring the flag rejected
+    // allocations the decoder already maintains (CIB1 ColorBuffer aliases, for one).
     const VkMemoryPropertyFlags cached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     const VkMemoryPropertyFlags cachedCoherent = cached | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -491,7 +496,7 @@ int main() {
                                                   EmulatedAllocationShape::kBufferRange,
                                                   EmulatedAllocationShape::kImageRange}) {
                 const bool expected =
-                    feature && (physical & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 &&
+                    (physical & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 &&
                     shape != EmulatedAllocationShape::kNone;
                 coverageCase(feature, physical, shape, expected);
             }

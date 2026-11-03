@@ -169,11 +169,12 @@ assert 'static constexpr size_t kMaxEmulatedCompletions = 64;' in decoder
 assert 'if (mEmulatedCompletions.size() >= kMaxEmulatedCompletions) {' in decoder
 assert 'if (it == mMemoryInfo.end()) return; // Freed memory never reaches the driver.' in decoder
 assert 'return VkMappedMemoryRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory, 0,' in decoder
-# The two gates are independent: the Vulkan call needs the feature, the CPU maintenance does not.
+# Neither direction is gated on the coherent feature: the guest is told the cached type is
+# coherent, so the host owes the invalidation in every configuration.
 apply = decoder[decoder.index('    void applyCacheMaintenance(VulkanDispatch* vk,'):]
 apply = apply[:apply.index('    // Consumes only fences the driver reports signalled.')]
-assert apply.index('VulkanDisableCoherentMemoryAndEmulate.enabled()') < apply.index(
-    'vk->vkInvalidateMappedMemoryRanges(')
+assert 'VulkanDisableCoherentMemoryAndEmulate' not in apply
+assert 'vk->vkInvalidateMappedMemoryRanges(' in apply
 assert apply.index('host_pointer_cache::invalidate(') > apply.index(
     'vk->vkInvalidateMappedMemoryRanges(')
 assert 'if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;' not in decoder
