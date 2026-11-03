@@ -28,7 +28,7 @@ else:
     workflow = workflow_path.read_text()
 
 drain_start = dec.index('void drainSignalledEmulatedCompletions(VkDevice device, VulkanDispatch* vk) {')
-drain_end = dec.index('void invalidateEmulatedCompletionsAfterWait(', drain_start)
+drain_end = dec.index('void destroyBufferWithExclusiveInfo(', drain_start)
 drain = dec[drain_start:drain_end]
 # Only tracked fences are queried, and the query happens under mMutex.
 assert 'mFenceInfo.find(it.first) == mFenceInfo.end()' in drain
