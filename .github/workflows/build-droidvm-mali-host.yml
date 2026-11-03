@@ -302,6 +302,10 @@ jobs:
             python3 -I ci/scripts/patch_systemblob_host_pointer_type.py source
             grep -q 'SYSBLOB-HOSTPTR' source/host/vulkan/vk_decoder_global_state.cpp
           fi
+          if [ "$HP_MODE" = "systemblob_only" ]; then
+            python3 -I ci/scripts/patch_host_extension_enable.py source
+            grep -q 'VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME' source/host/vulkan/vk_common_operations.cpp
+          fi
           if [ "$HP_MODE" = "full" ]; then
             python3 -I ci/scripts/patch_buffer_host_pointer.py source
             grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
@@ -317,7 +321,7 @@ jobs:
           grep -q 'GFXSTREAM_DUMP_IMPORT_FD' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_host_alloc_dump.py source
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py out/
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
           fi
