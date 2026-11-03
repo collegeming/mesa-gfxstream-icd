@@ -32,12 +32,9 @@ def edit(rel, old, new):
 
 d = 'host/vulkan/vk_decoder_global_state.cpp'
 
-# 1) The fallback flag lives in the same function scope as both the import branch and the
-#    memory-type mapping block.
-edit(d, '''        uint32_t virtioGpuContextId = 0;
-        VkMemoryPropertyFlags memoryPropertyFlags;''',
-     '''        uint32_t virtioGpuContextId = 0;
-        VkMemoryPropertyFlags memoryPropertyFlags;
+# 1) The fallback flag must be declared before the import branch that sets it.
+edit(d, '''        void* mappedPtr = nullptr;''',
+     '''        void* mappedPtr = nullptr;
         // Set when a classic buffer's backing cannot be aliased and the guest gets a fresh
         // allocation at the buffer's own host type instead.
         bool bufferAliasPlainFallback = false;''')
