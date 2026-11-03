@@ -29,9 +29,10 @@ else:
 
 for tag in ['IV-DIAG-CREATE:', 'IV-DIAG-CREATED:', 'IV-DIAG-DONE:', 'IV-DIAG-LABEL:',
             'IV-DIAG-DESTROY-IMAGE:', 'IV-DIAG-DESTROY-VIEW:', 'IV-DIAG-DESTROY-DEVICE:',
-            'IV-DIAG-FREE-MEMORY:']:
+            'IV-DIAG-FREE-MEMORY:', 'IV-DIAG-DESTROY-SEMAPHORE:', 'IV-DIAG-WAIT-SEMAPHORES:',
+            'IV-DIAG-WAIT-SEMAPHORES-DONE:', 'IV-DIAG-INVALIDATE:']:
     assert dec.count(tag) == 1, tag
-assert dec.count('GFXSTREAM_IV_DIAG') == 8
+assert dec.count('GFXSTREAM_IV_DIAG') == 12
 # The driver call is still the one and only image view creation; the diagnostics sit
 # around it, and the debug-label call site is unchanged.
 create_pos = dec.index('IV-DIAG-CREATE:')
@@ -50,6 +51,7 @@ assert 'freeMemoryLocked(device, deviceDispatch, memory);' in dec
 # Bounded.
 assert dec.count('fetch_add(1, std::memory_order_relaxed) < 512') == 7
 assert dec.count('fetch_add(1, std::memory_order_relaxed) < 64') == 1
+assert dec.count('fetch_add(1, std::memory_order_relaxed) < 256') == 4
 
 ops = read('host/vulkan/vk_decoder.cpp')
 assert ops.count('IV-DIAG-OP:') == 1
