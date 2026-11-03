@@ -661,47 +661,7 @@ def patch_lifetime(root, changes):
     p.write_text(s, encoding='utf-8')
     changes[str(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
 
-    # The fork routes every fatal signal straight to _exit so a dying crosvm cannot drag the
-    # phone through bionic's crash path. That leaves a FORTIFY abort with no stack at all.
-    # Opt-in only: backtrace formatting allocates, so the default (host-survival) path is
-    # byte-for-byte unchanged unless DVML_ABORT_BACKTRACE is set.
-    m = root / 'src/main.rs'
-    s = m.read_text(encoding='utf-8')
-    old_handler = '''extern "C" fn exit_without_crash_dump(sig: libc::c_int) {
-    // Async-signal-safe only. No allocation, no formatting, no logging.
-    unsafe { libc::_exit(128 + sig) };
-}'''
-    new_handler = '''static ABORT_BACKTRACE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
-extern "C" fn exit_without_crash_dump(sig: libc::c_int) {
-    // Opt-in diagnostic for an abort whose mutex owner is otherwise unknowable. Formatting a
-    // backtrace allocates, so it stays off by default and the measured host-survival path above
-    // is unchanged.
-    if ABORT_BACKTRACE.load(std::sync::atomic::Ordering::Relaxed) {
-        let mut frames = [std::ptr::null_mut::<libc::c_void>(); 64];
-        // SAFETY: the process is already terminating; this only writes to stderr.
-        unsafe {
-            let depth = libc::backtrace(frames.as_mut_ptr(), frames.len() as libc::c_int);
-            libc::backtrace_symbols_fd(frames.as_ptr(), depth, libc::STDERR_FILENO);
-        }
-    }
-    // Async-signal-safe: no allocation, no formatting, no destructors. The backtrace above is
-    // the only opt-in exception.
-    unsafe { libc::_exit(128 + sig) };
-}'''
-    s = replace(s, old_handler, new_handler)
-    s = replace(
-        s,
-        'fn install_fatal_signal_handlers() {\n',
-        'fn install_fatal_signal_handlers() {\n'
-        '    ABORT_BACKTRACE.store(\n'
-        '        std::env::var_os("DVML_ABORT_BACKTRACE").is_some(),\n'
-        '        std::sync::atomic::Ordering::Relaxed,\n'
-        '    );\n',
-    )
-    m.write_text(s, encoding='utf-8')
-    changes[str(m)] = hashlib.sha256(m.read_bytes()).hexdigest()
 
 
 def main():
