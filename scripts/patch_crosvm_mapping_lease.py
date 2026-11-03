@@ -685,6 +685,72 @@ def patch_lifetime(root, changes):
     p.write_text(s, encoding='utf-8')
     changes[str(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
 
+    # The fatal-signal handler exists so a crashing crosvm never reaches debuggerd, which is what
+    # reboots the host. That costs the stack. Add an env-gated dump that runs BEFORE _exit: raw
+    # addresses written with libc::write, plus a startup copy of /proc/self/maps so the addresses
+    # can be attributed to modules offline. Off unless CROSVM_FATAL_BACKTRACE is set.
+    m = root / 'src/main.rs'
+    s = m.read_text(encoding='utf-8')
+    old_handler = '''extern "C" fn exit_without_crash_dump(sig: libc::c_int) {
+    // Async-signal-safe only. No allocation, no formatting, no logging.
+    unsafe { libc::_exit(128 + sig) };
+}'''
+    new_handler = '''static FATAL_BACKTRACE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+extern "C" {
+    fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int) -> core::ffi::c_int;
+}
+
+fn fatal_write_hex(fd: libc::c_int, value: u64) {
+    let mut buf = [0u8; 17];
+    for i in 0..16 {
+        let nib = ((value >> ((15 - i) * 4)) & 0xf) as u8;
+        buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+    }
+    buf[16] = b'\\n';
+    unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+}
+
+extern "C" fn exit_without_crash_dump(sig: libc::c_int) {
+    // Async-signal-safe only. No allocation, no formatting, no logging.
+    if FATAL_BACKTRACE.load(std::sync::atomic::Ordering::Relaxed) {
+        unsafe {
+            libc::write(2, b"FATAL-BT\\n".as_ptr() as *const libc::c_void, 9);
+            // Own address first: it fixes the PIE load bias for the crosvm frames.
+            fatal_write_hex(2, exit_without_crash_dump as usize as u64);
+            let mut frames = [core::ptr::null_mut::<core::ffi::c_void>(); 48];
+            let n = backtrace(frames.as_mut_ptr(), frames.len() as core::ffi::c_int);
+            for slot in frames.iter().take(n.max(0) as usize) {
+                fatal_write_hex(2, *slot as usize as u64);
+            }
+        }
+    }
+    unsafe { libc::_exit(128 + sig) };
+}'''
+    s = replace(s, old_handler, new_handler)
+
+    old_main = '''fn main() {
+    syslog::early_init();
+    install_fatal_signal_handlers();'''
+    new_main = '''fn main() {
+    syslog::early_init();
+    let fatal_backtrace = std::env::var_os("CROSVM_FATAL_BACKTRACE").is_some();
+    FATAL_BACKTRACE.store(fatal_backtrace, std::sync::atomic::Ordering::Relaxed);
+    if fatal_backtrace {
+        // Module bases for offline symbolization. The path is writable by the calling app user.
+        if let Ok(maps) = std::fs::read("/proc/self/maps") {
+            let path = std::env::var("CROSVM_FATAL_MAPS_PATH")
+                .unwrap_or_else(|_| format!("/data/data/cn.classfun.droidvm/files/crosvm-maps-{}.txt", std::process::id()));
+            let _ = std::fs::write(path, maps);
+        }
+    }
+    install_fatal_signal_handlers();'''
+    s = replace(s, old_main, new_main)
+
+    m.write_text(s, encoding='utf-8')
+    changes[str(m)] = hashlib.sha256(m.read_bytes()).hexdigest()
+
 
 
 
