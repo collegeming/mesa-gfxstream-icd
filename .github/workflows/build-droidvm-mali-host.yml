@@ -12,7 +12,7 @@ on:
           - no_hostptr
         default: full
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/cib-linear-alias, diagnostic/coherent-cib1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -38,6 +38,7 @@ on:
       - 'scripts/*niri_cib_resource_diag*'
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
+      - 'scripts/*cib_linear_alias*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -289,6 +290,11 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_buffer_trace.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-buffer-trace-tests.txt
           python3 -I ci/scripts/patch_niri_cib_ahb_buffer_fix.py source
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
+          python3 -I ci/scripts/patch_cib_linear_alias.py source
+          grep -q 'CIB1-LINEAR-ALIAS' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'CIB1-LINEAR-ALIAS' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'ci.tiling = VK_IMAGE_TILING_LINEAR;' source/host/vulkan/vk_decoder_global_state.cpp
+          python3 -I ci/scripts/test_cib_linear_alias.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/cib-linear-alias-tests.txt
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
@@ -340,6 +346,7 @@ jobs:
           cp ci/scripts/*niri_cib_resource_diag* out/
           cp ci/scripts/*niri_cib_buffer_trace* out/
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
+          cp ci/scripts/*cib_linear_alias* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -440,7 +447,8 @@ jobs:
                   "Fall back to plain image-format properties when the external query rejects an entry; mark it supported without claiming external memory",
                   "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only",
                   "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change",
-                  "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains"
+                  "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains",
+                  "CIB1 AHB alias created with VK_IMAGE_TILING_LINEAR: optimal usage/flags preserved, explicit DRM_FORMAT_MOD_LINEAR accepted, OPTIMAL fallback unless linear covers every usage bit; AHB guards unchanged"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
@@ -612,6 +620,16 @@ jobs:
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
                              for name in ['patch_niri_cib_ahb_buffer_fix.py', 'test_niri_cib_ahb_buffer_fix.py',
                                           'niri-cib-ahb-buffer-fix-tests.txt']}
+              },
+              "cib_linear_alias": {
+                  "default_enabled": True,
+                  "scope": "ClassicImageBridge + AndroidAHB: ColorBuffer host image and guest alias created with VK_IMAGE_TILING_LINEAR; explicit DRM_FORMAT_MOD_LINEAR modifier accepted; other tilings fail closed",
+                  "preserved": "Guest contract fmt 44/50, usage 0x97, MUTABLE_FORMAT/EXTENDED_USAGE; AHB format/usage/allocationSize from the AHB query; AHB-RETAIN, AHB-SIZE-MISMATCH and forced-AHB-bits fallback unchanged",
+                  "fallback": "OPTIMAL image retained unless linear format features cover every optimal usage bit; no usage or flag rewrite",
+                  "offline_only": "Mask arithmetic over recorded masks (AHB 0x2, optimal image 0x1040, cached host-visible 0x7e02) plus source invariants; the real linear-image mask still requires the device probe",
+                  "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
+                             for name in ['patch_cib_linear_alias.py', 'test_cib_linear_alias.py',
+                                          'cib-linear-alias-tests.txt']}
               },
               "staging_contract": {
                   "default_enabled": False,
