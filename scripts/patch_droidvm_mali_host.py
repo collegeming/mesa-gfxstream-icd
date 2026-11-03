@@ -861,6 +861,12 @@ edit("host/vulkan/vk_decoder_global_state.cpp", decoder[start:end], "")
 # Preflight the original guest selection before ANY descriptor duplication, alias
 # lookup side effects, backing creation or pool reservation. Use physical flags,
 # not getHostMemoryInfoFromGuestMemoryTypeIndex's possible shadow flag override.
+#
+# The ColorBuffer/Buffer allocation APIs return a HOST memory type index. That value is
+# never a guest index, so it must not be fed to getHostMemoryInfoFromGuestMemoryTypeIndex:
+# the two index spaces only coincide while the guest->host map is the identity, and they do
+# not once a shadow or dedicated AHB type exists. Resolve an alias through the host index
+# space directly and keep the guest's own index for the guest flags.
 edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     '''        if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
@@ -871,18 +877,42 @@ edit(
         auto device = unbox_VkDevice(boxed_device);
         auto vk = dispatch_VkDevice(boxed_device);
         // Alias metadata lookup borrows existing backing; no dup/acquire/invalidation.
-        uint32_t selectedGuestIndex = pAllocateInfo->memoryTypeIndex;
+        const uint32_t guestIndex = pAllocateInfo->memoryTypeIndex;
+        uint32_t aliasHostIndex = 0;
+        bool hasAliasHostIndex = false;
+        // Only a shape the decoder tracks byte ranges for can be cache-maintained on the
+        // guest's behalf; kNone keeps the contract fail-closed.
+        EmulatedAllocationShape emulatedShape = EmulatedAllocationShape::kNone;
         VkDeviceSize aliasSize = 0;
         bool aliasDedicated = false;
         void* aliasMapped = nullptr;
         const auto* preflightCb = vk_find_struct<VkImportColorBufferGOOGLE>(pAllocateInfo);
         const auto* preflightBuffer = vk_find_struct<VkImportBufferGOOGLE>(pAllocateInfo);
         if (preflightCb) {
-            m_vkEmulation->getColorBufferAllocationInfo(preflightCb->colorBuffer, &aliasSize,
-                &selectedGuestIndex, &aliasDedicated, &aliasMapped);
+            if (m_vkEmulation->getColorBufferAllocationInfo(preflightCb->colorBuffer, &aliasSize,
+                    &aliasHostIndex, &aliasDedicated, &aliasMapped)) {
+                hasAliasHostIndex = true;
+                emulatedShape = EmulatedAllocationShape::kImageRange;
+            }
         } else if (preflightBuffer) {
-            m_vkEmulation->getBufferAllocationInfo(preflightBuffer->buffer, &aliasSize,
-                &selectedGuestIndex, &aliasDedicated);
+            if (m_vkEmulation->getBufferAllocationInfo(preflightBuffer->buffer, &aliasSize,
+                    &aliasHostIndex, &aliasDedicated)) {
+                hasAliasHostIndex = true;
+                emulatedShape = EmulatedAllocationShape::kBufferRange;
+            }
+        }
+        if (!hasAliasHostIndex) {
+            // A dedicated allocation names the object this memory is bound to, so its shape is
+            // known here. A plain allocation names nothing: its shape is only learned at bind
+            // time, so it stays uncovered and therefore rejected.
+            const auto* dedicated = vk_find_struct<VkMemoryDedicatedAllocateInfo>(pAllocateInfo);
+            if (dedicated) {
+                if (dedicated->image != VK_NULL_HANDLE) {
+                    emulatedShape = EmulatedAllocationShape::kImageRange;
+                } else if (dedicated->buffer != VK_NULL_HANDLE) {
+                    emulatedShape = EmulatedAllocationShape::kBufferRange;
+                }
+            }
         }
         {
             std::lock_guard<std::mutex> lock(mMutex);
@@ -892,41 +922,454 @@ edit(
             if (!physicalDeviceInfo) return VK_ERROR_DEVICE_LOST;
             const auto& helper = *physicalDeviceInfo->memoryPropertiesHelper;
             const auto& guest = helper.getGuestMemoryProperties();
-            const auto selected = helper.getHostMemoryInfoFromGuestMemoryTypeIndex(
-                selectedGuestIndex);
-            if (!selected || pAllocateInfo->memoryTypeIndex >= guest.memoryTypeCount) {
-                return VK_ERROR_INCOMPATIBLE_DRIVER;
-            }
+            if (guestIndex >= guest.memoryTypeCount) return VK_ERROR_INCOMPATIBLE_DRIVER;
+            // Two separate index spaces: an alias already names its host type, everything else
+            // names a guest type that still has to be mapped.
+            const auto selected = hasAliasHostIndex
+                ? helper.getHostMemoryInfoFromHostMemoryTypeIndex(aliasHostIndex)
+                : helper.getHostMemoryInfoFromGuestMemoryTypeIndex(guestIndex);
+            if (!selected) return VK_ERROR_INCOMPATIBLE_DRIVER;
             const auto physical = helper.getHostMemoryInfoFromHostMemoryTypeIndex(selected->index);
             if (!physical) return VK_ERROR_INCOMPATIBLE_DRIVER;
-            const VkResult coherentContract = validateHostCoherentContract(
-                guest.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags,
-                physical->memoryType.propertyFlags);
+            const VkMemoryPropertyFlags guestFlags = guest.memoryTypes[guestIndex].propertyFlags;
+            const bool emulationCovers = emulationCoversThisAllocation(
+                m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled(),
+                physical->memoryType.propertyFlags, emulatedShape);
+            const VkResult coherentContract = validateHostCoherentContractEmulated(
+                guestFlags, physical->memoryType.propertyFlags, emulationCovers);
             if (coherentContract != VK_SUCCESS) {
                 GFXSTREAM_ERROR("COHERENT-DOWNGRADE-REJECT: guestIndex=%u hostIndex=%u "
-                                "guestFlags=0x%x physicalFlags=0x%x result=%d",
-                                pAllocateInfo->memoryTypeIndex, physical->index,
-                                guest.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags,
-                                physical->memoryType.propertyFlags, (int)coherentContract);
+                                "guestFlags=0x%x physicalFlags=0x%x alias=%d shape=%u "
+                                "emulationCovers=0 result=%d",
+                                guestIndex, physical->index, guestFlags,
+                                physical->memoryType.propertyFlags, (int)hasAliasHostIndex,
+                                (unsigned)emulatedShape, (int)coherentContract);
                 return coherentContract;
+            }
+            if (emulationCovers && (guestFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+                GFXSTREAM_INFO("COHERENT-EMULATION-ALLOW: guestIndex=%u hostIndex=%u "
+                               "guestFlags=0x%x physicalFlags=0x%x alias=%d shape=%u",
+                               guestIndex, physical->index, guestFlags,
+                               physical->memoryType.propertyFlags, (int)hasAliasHostIndex,
+                               (unsigned)emulatedShape);
             }
         }''',
 )
 
 # Recheck the actual transformed host selection with physical flags. Leave the
 # separate shadow-routing flags unchanged; never add HOST_COHERENT to either.
+# The alias branch reuses the stored host index rather than feeding it back through the
+# guest index space, exactly as the preflight does.
 edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     '''            localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
             memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;''',
     '''            const auto physicalHostMemory = physicalDeviceInfo->memoryPropertiesHelper
-                ->getHostMemoryInfoFromHostMemoryTypeIndex(hostMemoryInfo.index);
+                ->getHostMemoryInfoFromHostMemoryTypeIndex(
+                    hasAliasHostIndex ? aliasHostIndex : hostMemoryInfo.index);
             if (!physicalHostMemory) return VK_ERROR_INCOMPATIBLE_DRIVER;
-            const VkResult coherentContract = validateHostCoherentContract(
-                guestMemoryPropertyFlags, physicalHostMemory->memoryType.propertyFlags);
-            if (coherentContract != VK_SUCCESS) return coherentContract;
+            const bool emulationCovers = emulationCoversThisAllocation(
+                m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled(),
+                physicalHostMemory->memoryType.propertyFlags, emulatedShape);
+            const VkResult coherentContract = validateHostCoherentContractEmulated(
+                guestMemoryPropertyFlags, physicalHostMemory->memoryType.propertyFlags,
+                emulationCovers);
+            if (coherentContract != VK_SUCCESS) {
+                GFXSTREAM_ERROR("COHERENT-DOWNGRADE-REJECT: recheck guestIndex=%u hostIndex=%u "
+                                "guestFlags=0x%x physicalFlags=0x%x alias=%d shape=%u "
+                                "emulationCovers=0 result=%d",
+                                guestIndex, physicalHostMemory->index, guestMemoryPropertyFlags,
+                                physicalHostMemory->memoryType.propertyFlags,
+                                (int)hasAliasHostIndex, (unsigned)emulatedShape,
+                                (int)coherentContract);
+                return coherentContract;
+            }
             localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
             memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;''',
+)
+
+# Coherent emulation owes the guest two cache operations the guest no longer issues itself:
+# a clean before the GPU reads, and an invalidate after the GPU writes. The pre-submit flush
+# exists upstream for buffers only; images were never registered and nothing ever invalidated.
+# Register image ranges next to buffer ranges so both shapes are tracked, and keep one bounded
+# per-fence record of what must be invalidated once the fence the guest waits on is signalled.
+edit(
+    "host/vulkan/vk_decoder_internal_structs.h",
+    """    std::unordered_map<VkBuffer, BoundMemoryRange> bufferMemoryRanges;
+};""",
+    """    std::unordered_map<VkBuffer, BoundMemoryRange> bufferMemoryRanges;
+    // Image ranges bound into this memory, mirroring bufferMemoryRanges. Emulated coherent
+    // allocations need the same clean-before-submit and invalidate-after-completion treatment
+    // whether the GPU touched a buffer or an image.
+    std::unordered_map<VkImage, BoundMemoryRange> imageMemoryRanges;
+};""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """    void bindToBufferLocked(MemoryInfo* memoryInfo, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size) {
+        memoryInfo->bufferMemoryRanges[buffer] = {offset, size};
+    }""",
+    """    void bindToBufferLocked(MemoryInfo* memoryInfo, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size) {
+        memoryInfo->bufferMemoryRanges[buffer] = {offset, size};
+    }
+
+    void unbindFromImageLocked(MemoryInfo* memoryInfo, VkImage image) {
+        memoryInfo->imageMemoryRanges.erase(image);
+    }
+
+    void bindToImageLocked(MemoryInfo* memoryInfo, VkImage image, VkDeviceSize offset,
+                           VkDeviceSize size) {
+        memoryInfo->imageMemoryRanges[image] = {offset, size};
+    }
+
+    // Allocations this host may legally run cache maintenance on. vkFlushMappedMemoryRanges and
+    // vkInvalidateMappedMemoryRanges require memory the caller mapped, so only memory this host
+    // mapped itself (needUnmap) qualifies; an allocation whose pointer came from an importer is
+    // not mapped here and is deliberately left out rather than driven through an invalid call.
+    std::vector<VkDeviceMemory> collectEmulatedMemoriesLocked(VkDevice device) REQUIRES(mMutex) {
+        std::vector<VkDeviceMemory> memories;
+        for (auto& it : mMemoryInfo) {
+            auto& info = it.second;
+            if (info.device != device) continue;
+            if (!info.needUnmap || !info.ptr) continue;
+            if (info.bufferMemoryRanges.empty() && info.imageMemoryRanges.empty()) continue;
+            memories.push_back(it.first);
+        }
+        return memories;
+    }
+
+    // What one submission still owes an invalidate to, keyed by the fence the guest will wait
+    // on. When the guest passed no fence this is the host-created fence that tracks the same
+    // submission, so the deferred (canDispatch=false) submit path is covered by the same record.
+    struct EmulatedCompletion {
+        VkDevice device = VK_NULL_HANDLE;
+        VkQueue queue = VK_NULL_HANDLE;
+        std::vector<VkDeviceMemory> memories;
+    };
+    static constexpr size_t kMaxEmulatedCompletions = 64;
+    std::unordered_map<VkFence, EmulatedCompletion> mEmulatedCompletions;
+
+    void recordEmulatedCompletion(VkDevice device, VkQueue queue, VkFence fence) {
+        if (fence == VK_NULL_HANDLE) return;
+        std::vector<VkDeviceMemory> memories;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            memories = collectEmulatedMemoriesLocked(device);
+            if (memories.empty()) return;
+            auto it = mEmulatedCompletions.find(fence);
+            if (it == mEmulatedCompletions.end()) {
+                if (mEmulatedCompletions.size() >= kMaxEmulatedCompletions) {
+                    // A guest that never waits would otherwise grow this map without bound.
+                    // Dropping the record degrades to the pre-emulation behaviour (no invalidate)
+                    // rather than invalidating work that may still be running.
+                    static std::atomic<uint64_t> sEmulatedCompletionDrops{0};
+                    const uint64_t n = ++sEmulatedCompletionDrops;
+                    if (n == 1 || (n & (n - 1)) == 0) {
+                        GFXSTREAM_WARNING(
+                            "EMULATED-COHERENT: %zu completions pending, not tracking fence %p "
+                            "(drop #%llu); this submission gets no invalidate",
+                            mEmulatedCompletions.size(), fence, (unsigned long long)n);
+                    }
+                    return;
+                }
+                it = mEmulatedCompletions.emplace(fence, EmulatedCompletion{}).first;
+            }
+            it->second.device = device;
+            it->second.queue = queue;
+            // A fence is reused after vkResetFences, and the earlier list must not be lost.
+            for (VkDeviceMemory memory : memories) {
+                if (std::find(it->second.memories.begin(), it->second.memories.end(), memory) ==
+                    it->second.memories.end()) {
+                    it->second.memories.push_back(memory);
+                }
+            }
+        }
+    }
+
+    // Whole allocations, not the recorded sub-ranges: a sub-range has to respect the device's
+    // nonCoherentAtomSize, which is not carried at this layer, while offset 0 with VK_WHOLE_SIZE
+    // is legal on any device. The per-object ranges remain the record of what is in play.
+    static VkMappedMemoryRange emulatedWholeRange(VkDeviceMemory memory) {
+        return VkMappedMemoryRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory, 0,
+                                   VK_WHOLE_SIZE};
+    }
+
+    std::vector<VkMappedMemoryRange> takeEmulatedCompletionRangesLocked(
+        VkDevice device, const VkFence* fences, uint32_t fenceCount) REQUIRES(mMutex) {
+        std::vector<VkMappedMemoryRange> ranges;
+        for (uint32_t i = 0; i < fenceCount; ++i) {
+            auto it = mEmulatedCompletions.find(fences[i]);
+            if (it == mEmulatedCompletions.end()) continue;
+            if (it->second.device != device) continue;
+            for (VkDeviceMemory memory : it->second.memories) {
+                // A freed memory must never reach the driver; the record is only a hint about
+                // what was in flight, not ownership.
+                if (mMemoryInfo.find(memory) == mMemoryInfo.end()) continue;
+                ranges.push_back(emulatedWholeRange(memory));
+            }
+            mEmulatedCompletions.erase(it);
+        }
+        return ranges;
+    }
+
+    std::vector<VkMappedMemoryRange> takeEmulatedCompletionRangesForQueueLocked(
+        VkQueue queue, VkDevice* outDevice) REQUIRES(mMutex) {
+        std::vector<VkMappedMemoryRange> ranges;
+        for (auto it = mEmulatedCompletions.begin(); it != mEmulatedCompletions.end();) {
+            if (it->second.queue != queue) {
+                ++it;
+                continue;
+            }
+            if (outDevice && *outDevice == VK_NULL_HANDLE) *outDevice = it->second.device;
+            for (VkDeviceMemory memory : it->second.memories) {
+                if (mMemoryInfo.find(memory) == mMemoryInfo.end()) continue;
+                ranges.push_back(emulatedWholeRange(memory));
+            }
+            it = mEmulatedCompletions.erase(it);
+        }
+        return ranges;
+    }
+
+    // Consumes only fences the driver reports signalled. A waitAny success or a timeout says
+    // nothing about the other fences in the call, so each candidate is asked directly.
+    void invalidateEmulatedCompletionsAfterWait(VkDevice device, VulkanDispatch* vk,
+                                                const VkFence* pFences, uint32_t fenceCount,
+                                                VkBool32 waitAll, VkResult waitResult) {
+        if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;
+        if (waitResult != VK_SUCCESS && waitResult != VK_TIMEOUT) return;
+        std::vector<VkFence> candidates;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            for (uint32_t i = 0; i < fenceCount; ++i) {
+                auto it = mEmulatedCompletions.find(pFences[i]);
+                if (it == mEmulatedCompletions.end()) continue;
+                if (it->second.device != device) continue;
+                candidates.push_back(pFences[i]);
+            }
+        }
+        if (candidates.empty()) return;
+        const bool allListed = waitAll && waitResult == VK_SUCCESS;
+        std::vector<VkFence> completed;
+        for (VkFence fence : candidates) {
+            if (allListed || vk->vkGetFenceStatus(device, fence) == VK_SUCCESS) {
+                completed.push_back(fence);
+            }
+        }
+        if (completed.empty()) return;
+        std::vector<VkMappedMemoryRange> ranges;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            ranges = takeEmulatedCompletionRangesLocked(device, completed.data(),
+                                                        static_cast<uint32_t>(completed.size()));
+        }
+        if (!ranges.empty()) {
+            vk->vkInvalidateMappedMemoryRanges(device, static_cast<uint32_t>(ranges.size()),
+                                               ranges.data());
+        }
+    }
+
+    // A semaphore wait names no fence, so this only drains records whose own fence is already
+    // signalled. It never invalidates work that has not completed.
+    void drainSignalledEmulatedCompletions(VkDevice device, VulkanDispatch* vk) {
+        if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;
+        std::vector<VkFence> candidates;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            for (auto& it : mEmulatedCompletions) {
+                if (it.second.device != device) continue;
+                candidates.push_back(it.first);
+            }
+        }
+        if (candidates.empty()) return;
+        std::vector<VkFence> completed;
+        for (VkFence fence : candidates) {
+            if (vk->vkGetFenceStatus(device, fence) == VK_SUCCESS) completed.push_back(fence);
+        }
+        if (completed.empty()) return;
+        std::vector<VkMappedMemoryRange> ranges;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            ranges = takeEmulatedCompletionRangesLocked(device, completed.data(),
+                                                        static_cast<uint32_t>(completed.size()));
+        }
+        if (!ranges.empty()) {
+            vk->vkInvalidateMappedMemoryRanges(device, static_cast<uint32_t>(ranges.size()),
+                                               ranges.data());
+        }
+    }""",
+)
+
+# Track image bindings in both bind entry points, and drop them when the image goes away.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        imageInfo->memory = memory;""",
+    """        imageInfo->memory = memory;
+        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            bindToImageLocked(memoryInfo, image, memoryOffset, VK_WHOLE_SIZE);
+        }""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """                imageInfo->memory = pBindInfos[i].memory;""",
+    """                imageInfo->memory = pBindInfos[i].memory;
+                if (m_vkEmulation->getFeatures()
+                        .VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+                    bindToImageLocked(memoryInfo, pBindInfos[i].image,
+                                      pBindInfos[i].memoryOffset, VK_WHOLE_SIZE);
+                }""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        destroyImageWithExclusiveInfo(device, deviceDispatch, image, imageInfo);
+
+        mImageInfo.erase(image);""",
+    """        destroyImageWithExclusiveInfo(device, deviceDispatch, image, imageInfo);
+
+        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            auto* memoryInfo = gfxstream::base::find(mMemoryInfo, imageInfo.memory);
+            if (memoryInfo) unbindFromImageLocked(memoryInfo, image);
+        }
+
+        mImageInfo.erase(image);""",
+)
+
+# Replace the buffer-only pre-submit flush with the tracked set (buffers and images), and record
+# the submission so the matching invalidate can happen when its fence is observed complete.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            std::lock_guard<std::mutex> lock(mMutex);
+            std::vector<VkMappedMemoryRange> memoryRangesToFlush;
+            for (auto& it: mMemoryInfo) {
+                auto pMemory = it.first;
+                auto& mappedData = it.second;
+                if (mappedData.device != device) {
+                    continue;
+                }
+                if (mappedData.bufferMemoryRanges.empty()) {
+                    continue;
+                }
+                // TODO(b/424729656): this logic should run only for emulated memory
+                for (const auto& pair : mappedData.bufferMemoryRanges) {
+                    memoryRangesToFlush.push_back({
+                        .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+                        .pNext = nullptr,
+                        .memory = pMemory,
+                        .offset = pair.second.offset,
+                        .size = pair.second.size,
+                    });
+                }
+            }
+
+            if (!memoryRangesToFlush.empty()) {
+                // TODO(b/424729656): Invalidate might be necessary around a fence.
+                vk->vkFlushMappedMemoryRanges(device, static_cast<uint32_t>(memoryRangesToFlush.size()),
+                                              memoryRangesToFlush.data());
+            }
+        }""",
+    """        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            std::vector<VkDeviceMemory> emulatedMemories;
+            {
+                std::lock_guard<std::mutex> lock(mMutex);
+                emulatedMemories = collectEmulatedMemoriesLocked(device);
+            }
+            if (!emulatedMemories.empty()) {
+                std::vector<VkMappedMemoryRange> memoryRangesToFlush;
+                memoryRangesToFlush.reserve(emulatedMemories.size());
+                for (VkDeviceMemory memory : emulatedMemories) {
+                    memoryRangesToFlush.push_back(emulatedWholeRange(memory));
+                }
+                vk->vkFlushMappedMemoryRanges(device,
+                                              static_cast<uint32_t>(memoryRangesToFlush.size()),
+                                              memoryRangesToFlush.data());
+            }
+        }""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """            // Note: This fence will be managed by the DeviceOpTracker after the
+            // OnQueueSubmittedWithFence call, so it does not need to be destroyed in the scope
+            // of this queueSubmit
+            usedFence = builder.CreateFenceForOp();
+        }""",
+    """            // Note: This fence will be managed by the DeviceOpTracker after the
+            // OnQueueSubmittedWithFence call, so it does not need to be destroyed in the scope
+            // of this queueSubmit
+            usedFence = builder.CreateFenceForOp();
+        }
+
+        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            // Recorded against the fence the guest waits on, so the deferred (canDispatch=false)
+            // path below is covered: it dispatches later with this same fence.
+            recordEmulatedCompletion(device, queue, usedFence);
+        }""",
+)
+
+# Completion hooks. vkWaitForFences is the only place the guest learns the GPU finished, so it
+# is the invalidate boundary; vkGetFenceStatus and vkQueueWaitIdle cover polling and the
+# host-created fences of submissions the guest never named. vkWaitSemaphores can only drain
+# records whose fence already reports signalled.
+# Hooked at the decoder entry point rather than inside waitForFences(): the helper's return
+# statement is an anchor for the roundtrip-trace patch, and this is the guest-visible boundary.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        // TODO(b/397501277): wait state checks cause test failures on old API levels
+        return waitForFences(device, vk, fenceCount, pFences, waitAll, timeout, false);""",
+    """        // TODO(b/397501277): wait state checks cause test failures on old API levels
+        const VkResult waitResult =
+            waitForFences(device, vk, fenceCount, pFences, waitAll, timeout, false);
+        invalidateEmulatedCompletionsAfterWait(device, vk, pFences, fenceCount, waitAll,
+                                               waitResult);
+        return waitResult;""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        return vk->vkGetFenceStatus(device, fence);
+    }""",
+    """        const VkResult status = vk->vkGetFenceStatus(device, fence);
+        if (status == VK_SUCCESS) {
+            invalidateEmulatedCompletionsAfterWait(device, vk, &fence, 1, VK_TRUE, VK_SUCCESS);
+        }
+        return status;
+    }""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        return vk->vkQueueWaitIdle(queue);""",
+    """        const VkResult idleResult = vk->vkQueueWaitIdle(queue);
+        if (idleResult == VK_SUCCESS &&
+            m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            // Every submission on this queue has completed, including the host-created fences of
+            // submissions the guest passed no fence for.
+            std::vector<VkMappedMemoryRange> ranges;
+            VkDevice queueDevice = VK_NULL_HANDLE;
+            {
+                std::lock_guard<std::mutex> lock(mMutex);
+                ranges = takeEmulatedCompletionRangesForQueueLocked(queue, &queueDevice);
+            }
+            if (!ranges.empty()) {
+                vk->vkInvalidateMappedMemoryRanges(queueDevice,
+                                                   static_cast<uint32_t>(ranges.size()),
+                                                   ranges.data());
+            }
+        }
+        return idleResult;""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        return deviceDispatch->vkWaitSemaphores(device, pWaitInfo, timeout);""",
+    """        const VkResult waitResult = deviceDispatch->vkWaitSemaphores(device, pWaitInfo, timeout);
+        if (waitResult == VK_SUCCESS) {
+            drainSignalledEmulatedCompletions(device, deviceDispatch);
+        }
+        return waitResult;""",
 )
 
 # Central validation sees the finished chain, irrespective of pointer value or
