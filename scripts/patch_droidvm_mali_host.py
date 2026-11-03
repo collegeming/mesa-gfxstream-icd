@@ -1227,6 +1227,20 @@ edit(
                                                static_cast<uint32_t>(maintenance.vulkanRanges.size()),
                                                maintenance.vulkanRanges.data());
         }
+        if (!maintenance.hostPointerRanges.empty()) {
+            // Bounded positive evidence: without this the only trace of the path is the
+            // cap-overflow warning below, which is the case where it did NOT run.
+            static std::atomic<uint32_t> sHostPointerMaintenanceLogs{0};
+            const uint32_t n = sHostPointerMaintenanceLogs.fetch_add(1);
+            if (n < 8) {
+                VkDeviceSize bytes = 0;
+                for (const auto& range : maintenance.hostPointerRanges) bytes += range.size;
+                GFXSTREAM_INFO("HOSTPTR-INVALIDATE: call=%u ranges=%zu bytes=%llu first=%p",
+                               n + 1, maintenance.hostPointerRanges.size(),
+                               (unsigned long long)bytes,
+                               maintenance.hostPointerRanges[0].base);
+            }
+        }
         for (const auto& range : maintenance.hostPointerRanges) {
             host_pointer_cache::invalidate(range.base, range.size);
         }

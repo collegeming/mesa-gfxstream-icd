@@ -177,6 +177,11 @@ assert apply.index('VulkanDisableCoherentMemoryAndEmulate.enabled()') < apply.in
 assert apply.index('host_pointer_cache::invalidate(') > apply.index(
     'vk->vkInvalidateMappedMemoryRanges(')
 assert 'if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;' not in decoder
+# Positive evidence that the path ran, bounded like every other diagnostic here.
+assert 'HOSTPTR-INVALIDATE: call=%u ranges=%zu bytes=%llu first=%p' in decoder
+assert 'if (n < 8) {' in apply
+assert apply.index('HOSTPTR-INVALIDATE: call=%u') < apply.index(
+    'host_pointer_cache::invalidate(range.base, range.size);')
 submit = decoder[decoder.index('    VkResult on_vkQueueSubmit('):]
 submit = submit[:submit.index('    VkResult on_vkQueueWaitIdle(')]
 flush = submit.index('vkFlushMappedMemoryRanges(')
