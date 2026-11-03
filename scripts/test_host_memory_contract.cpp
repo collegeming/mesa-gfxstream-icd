@@ -1,4 +1,5 @@
 #include "host_memory_contract.h"
+#include "host_pointer_cache.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -231,6 +232,96 @@ void imageRangeCase() {
     check(book.imageRanges[9] == uint64_t{8192});
 }
 
+// --- Host-pointer import maintenance ---------------------------------------------------------
+// Models appendCacheMaintenanceLocked's range math: a tracked range is clamped to the import's
+// own extent, skipped when it starts at or past the end, and VK_WHOLE_SIZE means "to the end".
+// With nothing bound the whole allocation is maintained, because the guest can read memory it
+// allocated before binding anything.
+struct HostPointerRangeModel {
+    uint64_t allocationSize = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> tracked; // offset, size
+    std::vector<std::pair<uint64_t, uint64_t>> emitted;
+
+    void build() {
+        emitted.clear();
+        auto add = [this](uint64_t offset, uint64_t size) {
+            if (offset >= allocationSize) return;
+            const uint64_t remaining = allocationSize - offset;
+            const uint64_t extent =
+                (size == VK_WHOLE_SIZE || size > remaining) ? remaining : size;
+            if (!extent) return;
+            emitted.emplace_back(offset, extent);
+        };
+        for (const auto& range : tracked) add(range.first, range.second);
+        if (tracked.empty()) add(0, VK_WHOLE_SIZE);
+    }
+};
+
+void hostPointerRangeCase() {
+    ++scenarios;
+    HostPointerRangeModel model;
+    model.allocationSize = 4096;
+    // Nothing bound: the whole allocation.
+    model.build();
+    checkSize(model.emitted.size(), 1);
+    check(model.emitted[0].first == uint64_t{0});
+    check(model.emitted[0].second == uint64_t{4096});
+    // A bound buffer range is used as-is.
+    model.tracked = {{0, 1024}};
+    model.build();
+    checkSize(model.emitted.size(), 1);
+    check(model.emitted[0].first == uint64_t{0});
+    check(model.emitted[0].second == uint64_t{1024});
+    // An image range records VK_WHOLE_SIZE, which becomes the remainder.
+    model.tracked = {{1024, VK_WHOLE_SIZE}};
+    model.build();
+    checkSize(model.emitted.size(), 1);
+    check(model.emitted[0].first == uint64_t{1024});
+    check(model.emitted[0].second == uint64_t{3072});
+    // A range larger than the allocation is clamped.
+    model.tracked = {{0, 8192}};
+    model.build();
+    check(model.emitted[0].second == uint64_t{4096});
+    // Ranges that start at or past the end produce nothing.
+    model.tracked = {{4096, 1024}};
+    model.build();
+    check(model.emitted.empty());
+    model.tracked = {{8192, VK_WHOLE_SIZE}};
+    model.build();
+    check(model.emitted.empty());
+    // A zero-length range produces nothing.
+    model.tracked = {{2048, 0}};
+    model.build();
+    check(model.emitted.empty());
+    // Both shapes at once stay inside the allocation.
+    model.tracked = {{0, 256}, {2048, VK_WHOLE_SIZE}};
+    model.build();
+    checkSize(model.emitted.size(), 2);
+    check(model.emitted[0].second == uint64_t{256});
+    check(model.emitted[1].first == uint64_t{2048});
+    check(model.emitted[1].second == uint64_t{2048});
+}
+
+// The maintenance primitive itself. Null and empty ranges must be inert, an unaligned base and a
+// size that is not a cache-line multiple must be accepted, and nothing outside the range may be
+// disturbed. On the x86 CI host this exercises the portable fallback; on AArch64 it runs the
+// dc cvac / dc civac loop over real memory.
+void hostPointerCachePrimitiveCase() {
+    ++scenarios;
+    char buffer[256];
+    std::fill(buffer, buffer + sizeof(buffer), char{0x5a});
+    host_pointer_cache::invalidate(nullptr, 128);
+    host_pointer_cache::invalidate(buffer, 0);
+    host_pointer_cache::clean(nullptr, 0);
+    host_pointer_cache::clean(buffer, sizeof(buffer));
+    host_pointer_cache::invalidate(buffer, sizeof(buffer));
+    host_pointer_cache::invalidate(buffer + 1, 7);   // unaligned base, odd size
+    host_pointer_cache::clean(buffer + 63, 65);      // straddles cache lines
+    bool untouched = true;
+    for (char value : buffer) untouched = untouched && value == char{0x5a};
+    check(untouched); // Maintenance never writes payload bytes.
+}
+
 // --- Flush/invalidate ordering --------------------------------------------------------------
 // Models the production submit path: clean before dispatch, record against the fence the guest
 // waits on, invalidate only once that fence is observed signalled. A record is never consumed
@@ -245,8 +336,11 @@ struct CompletionModel {
     std::size_t cap = 64;
 
     void submit(uint64_t fence, const std::vector<uint64_t>& memories, bool hostMapped,
-                bool rangeBound) {
-        if (!feature || !hostMapped || !rangeBound || memories.empty()) return;
+                bool rangeBound, bool hostPointerImport = false) {
+        // A host-pointer import is maintained regardless of the coherent feature; the Vulkan
+        // path needs both the feature and a mapping this host made itself.
+        const bool eligible = hostPointerImport || (feature && hostMapped && rangeBound);
+        if (!eligible || memories.empty()) return;
         auto it = pending.find(fence);
         if (it == pending.end()) {
             if (pending.size() >= cap) {
@@ -326,6 +420,21 @@ void completionOrderingCase() {
     bounded.queueIdle();
     checkSize(bounded.invalidated.size(), 2);
     check(bounded.pending.empty());
+    // A host-pointer import is recorded and invalidated with the coherent feature off. This is
+    // the current device configuration: the feature is disabled, the guest is told a cached type
+    // is coherent, and only the host can maintain the caches.
+    CompletionModel noFeature;
+    noFeature.feature = false;
+    noFeature.submit(1, {7}, false, false, true); // host-pointer import, never vkMapMemory'd
+    checkSize(noFeature.pending.size(), 1);
+    noFeature.signal(1);
+    noFeature.waitAndInvalidate({1});
+    checkSize(noFeature.invalidated.size(), 1);
+    // The same submission without the import flag stays unrecorded with the feature off, so the
+    // Vulkan path can never run without the feature.
+    noFeature.submit(2, {8}, true, true);
+    check(noFeature.pending.empty());
+    checkSize(noFeature.invalidated.size(), 1);
 }
 }
 int main() {
@@ -409,10 +518,14 @@ int main() {
     emulatedContractCase(nc, cached, true, VK_SUCCESS);
 
     imageRangeCase();
+    hostPointerRangeCase();
+    hostPointerCachePrimitiveCase();
     completionOrderingCase();
 
     std::cout << "PASS: " << scenarios << " host memory contract scenarios; exact shared helpers, "
               << "no index/flags rewrite, reject before dispatch/resources, borrowed RAII once; "
               << "alias host index never re-mapped, emulation waiver bounded to cached+tracked, "
-              << "image ranges tracked, invalidate only after completion; no GPU\n";
+              << "image ranges tracked, invalidate only after completion, host-pointer ranges "
+              << "clamped to the import, host-pointer maintenance independent of the feature; "
+              << "no GPU\n";
 }
