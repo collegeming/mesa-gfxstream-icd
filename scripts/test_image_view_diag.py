@@ -27,21 +27,26 @@ else:
     assert workflow_path is not None, 'CI workflow not found'
     workflow = workflow_path.read_text()
 
-for tag in ['IV-DIAG-CREATE', 'IV-DIAG-DESTROY-IMAGE', 'IV-DIAG-DESTROY-VIEW',
+for tag in ['IV-DIAG-CREATE:', 'IV-DIAG-CREATED:', 'IV-DIAG-DESTROY-IMAGE', 'IV-DIAG-DESTROY-VIEW',
             'IV-DIAG-DESTROY-DEVICE', 'IV-DIAG-FREE-MEMORY']:
     assert dec.count(tag) == 1, tag
-assert dec.count('GFXSTREAM_IV_DIAG') == 5
-# The driver call is still the one and only image view creation; the diagnostic sits before it.
-create_pos = dec.index('IV-DIAG-CREATE')
+assert dec.count('GFXSTREAM_IV_DIAG') == 6
+# The driver call is still the one and only image view creation; the diagnostic sits before it
+# and the result line after it.
+create_pos = dec.index('IV-DIAG-CREATE:')
 driver_pos = dec.index('vk->vkCreateImageView(device, pCreateInfo, nullptr, pView);')
-assert create_pos < driver_pos
-assert driver_pos - create_pos < 3000
+created_pos = dec.index('IV-DIAG-CREATED:')
+assert create_pos < driver_pos < created_pos
+assert driver_pos - create_pos < 3200
+# Direct fd-2 writes: logcat may lose the last buffered line before the abort.
+assert dec.count('fflush(stderr);') >= 6
+assert '#include <cstdio>' in dec
 # Destroy paths still call the driver; diagnostics do not replace the calls.
 assert 'destroyImageWithExclusiveInfo(device, deviceDispatch, image, imageInfo);' in dec
 assert 'destroyImageViewWithExclusiveInfo(device, deviceDispatch, imageView, imageViewInfo);' in dec
 assert 'freeMemoryLocked(device, deviceDispatch, memory);' in dec
 # Bounded.
-assert dec.count('fetch_add(1, std::memory_order_relaxed) < 512') == 4
+assert dec.count('fetch_add(1, std::memory_order_relaxed) < 512') == 5
 assert dec.count('fetch_add(1, std::memory_order_relaxed) < 64') == 1
 
 assert workflow.index('patch_cib_buffer_dmabuf_export.py') < workflow.index(
