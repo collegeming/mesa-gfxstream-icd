@@ -845,11 +845,17 @@ edit(
 
 # The exact helper tested by CI is embedded in both allocation translation units.
 contract_header = (Path(__file__).resolve().parent / "host_memory_contract.h").read_text(encoding="utf-8")
-for rel, anchor in [
-    ("host/vulkan/vk_decoder_global_state.cpp", '#include "vk_decoder_global_state.h"'),
-    ("host/vulkan/vk_common_operations.cpp", '#include <algorithm>'),
+# Cache maintenance for host-pointer imports is decoder-only: the allocation side never
+# maintains anything, it only records what was imported.
+cache_header = (Path(__file__).resolve().parent / "host_pointer_cache.h").read_text(encoding="utf-8")
+for rel, anchor, extra in [
+    ("host/vulkan/vk_decoder_global_state.cpp", '#include "vk_decoder_global_state.h"',
+     cache_header),
+    ("host/vulkan/vk_common_operations.cpp", '#include <algorithm>', ""),
 ]:
-    edit(rel, anchor, anchor + "\n" + contract_header.replace("#pragma once\n", ""))
+    edit(rel, anchor,
+         anchor + "\n" + contract_header.replace("#pragma once\n", "")
+         + extra.replace("#pragma once\n", ""))
 
 # Delete the entire private-only query and silent fallback, not just its message.
 decoder_path = root / "host/vulkan/vk_decoder_global_state.cpp"
@@ -998,10 +1004,18 @@ edit(
     """    std::unordered_map<VkBuffer, BoundMemoryRange> bufferMemoryRanges;
 };""",
     """    std::unordered_map<VkBuffer, BoundMemoryRange> bufferMemoryRanges;
-    // Image ranges bound into this memory, mirroring bufferMemoryRanges. Emulated coherent
-    // allocations need the same clean-before-submit and invalidate-after-completion treatment
-    // whether the GPU touched a buffer or an image.
+    // Image ranges bound into this memory, mirroring bufferMemoryRanges. The coherent contract
+    // needs the same clean-before-submit and invalidate-after-completion treatment whether the
+    // GPU touched a buffer or an image, and the host-pointer path needs the extents with the
+    // coherent feature switched off.
     std::unordered_map<VkImage, BoundMemoryRange> imageMemoryRanges;
+    // Set when the final allocation chain imported this memory with
+    // VK_EXT_external_memory_host: the host virtual address the driver reads and writes through,
+    // and the byte extent behind it. The host never vkMapMemory'd these pages, so
+    // vkFlushMappedMemoryRanges/vkInvalidateMappedMemoryRanges are not legal on this allocation
+    // and the CPU cache has to be maintained directly.
+    void* importedHostPointer = nullptr;
+    VkDeviceSize importedHostPointerSize = 0;
 };""",
 )
 
@@ -1023,20 +1037,92 @@ edit(
         memoryInfo->imageMemoryRanges[image] = {offset, size};
     }
 
-    // Allocations this host may legally run cache maintenance on. vkFlushMappedMemoryRanges and
-    // vkInvalidateMappedMemoryRanges require memory the caller mapped, so only memory this host
-    // mapped itself (needUnmap) qualifies; an allocation whose pointer came from an importer is
-    // not mapped here and is deliberately left out rather than driven through an invalid call.
-    std::vector<VkDeviceMemory> collectEmulatedMemoriesLocked(VkDevice device) REQUIRES(mMutex) {
+    // One byte range the host must maintain by hand: the memory behind it was imported with
+    // VK_EXT_external_memory_host, so the host never vkMapMemory'd it and the mapped-range calls
+    // are illegal. Maintenance is performed directly on these addresses.
+    struct HostPointerRange {
+        void* base = nullptr;
+        VkDeviceSize size = 0;
+    };
+
+    // What one completed submission still owes the guest.
+    struct PendingMaintenance {
+        VkDevice device = VK_NULL_HANDLE;
+        std::vector<VkMappedMemoryRange> vulkanRanges;
+        std::vector<HostPointerRange> hostPointerRanges;
+    };
+
+    // Memories with something to maintain. Two independent families, and only the first may ever
+    // reach the Vulkan mapped-range calls:
+    //  - Vulkan-eligible: this host vkMapMemory'd the allocation and at least one tracked buffer
+    //    or image range is bound into it. Only acted on while the coherent emulation is enabled.
+    //  - Host-pointer imports: the pages are the guest's, so the CPU cache is maintained
+    //    directly. This is the family the current device configuration runs on, where the
+    //    coherent feature is off.
+    std::vector<VkDeviceMemory> collectCacheMaintenanceMemoriesLocked(VkDevice device)
+        REQUIRES(mMutex) {
         std::vector<VkDeviceMemory> memories;
+        for (auto& it : mMemoryInfo) {
+            auto& info = it.second;
+            if (info.device != device) continue;
+            const bool vulkanEligible = info.needUnmap && info.ptr &&
+                (!info.bufferMemoryRanges.empty() || !info.imageMemoryRanges.empty());
+            const bool hostPointer = info.importedHostPointer != nullptr &&
+                info.importedHostPointerSize != 0;
+            if (!vulkanEligible && !hostPointer) continue;
+            memories.push_back(it.first);
+        }
+        return memories;
+    }
+
+    // The pre-submit clean set: memory this host mapped itself, with at least one tracked range.
+    // Host-pointer imports are deliberately absent -- vkFlushMappedMemoryRanges on a VkDevice
+    // the host never mapped is not legal, and their clean side is not implemented here.
+    std::vector<VkMappedMemoryRange> collectVulkanFlushRangesLocked(VkDevice device)
+        REQUIRES(mMutex) {
+        std::vector<VkMappedMemoryRange> ranges;
         for (auto& it : mMemoryInfo) {
             auto& info = it.second;
             if (info.device != device) continue;
             if (!info.needUnmap || !info.ptr) continue;
             if (info.bufferMemoryRanges.empty() && info.imageMemoryRanges.empty()) continue;
-            memories.push_back(it.first);
+            ranges.push_back(emulatedWholeRange(it.first));
         }
-        return memories;
+        return ranges;
+    }
+
+    // Appends the maintenance owed for one memory. Tracked buffer and image ranges are used when
+    // they exist; a host-pointer import with nothing bound falls back to the whole allocation,
+    // because the guest can read memory it allocated before binding anything, and a
+    // whole-allocation invalidate is a superset of every tracked range either way.
+    void appendCacheMaintenanceLocked(VkDeviceMemory memory, PendingMaintenance* out)
+        REQUIRES(mMutex) {
+        auto it = mMemoryInfo.find(memory);
+        if (it == mMemoryInfo.end()) return; // Freed memory never reaches the driver.
+        const auto& info = it->second;
+        if (info.needUnmap && info.ptr &&
+            (!info.bufferMemoryRanges.empty() || !info.imageMemoryRanges.empty())) {
+            out->vulkanRanges.push_back(emulatedWholeRange(memory));
+        }
+        if (!info.importedHostPointer || !info.importedHostPointerSize) return;
+        auto addRange = [&info, out](VkDeviceSize offset, VkDeviceSize size) {
+            if (offset >= info.importedHostPointerSize) return;
+            const VkDeviceSize remaining = info.importedHostPointerSize - offset;
+            const VkDeviceSize extent =
+                (size == VK_WHOLE_SIZE || size > remaining) ? remaining : size;
+            if (!extent) return;
+            out->hostPointerRanges.push_back(HostPointerRange{
+                static_cast<char*>(info.importedHostPointer) + offset, extent});
+        };
+        for (const auto& range : info.bufferMemoryRanges) {
+            addRange(range.second.offset, range.second.size);
+        }
+        for (const auto& range : info.imageMemoryRanges) {
+            addRange(range.second.offset, range.second.size);
+        }
+        if (info.bufferMemoryRanges.empty() && info.imageMemoryRanges.empty()) {
+            addRange(0, VK_WHOLE_SIZE);
+        }
     }
 
     // What one submission still owes an invalidate to, keyed by the fence the guest will wait
@@ -1055,20 +1141,20 @@ edit(
         std::vector<VkDeviceMemory> memories;
         {
             std::lock_guard<std::mutex> lock(mMutex);
-            memories = collectEmulatedMemoriesLocked(device);
+            memories = collectCacheMaintenanceMemoriesLocked(device);
             if (memories.empty()) return;
             auto it = mEmulatedCompletions.find(fence);
             if (it == mEmulatedCompletions.end()) {
                 if (mEmulatedCompletions.size() >= kMaxEmulatedCompletions) {
                     // A guest that never waits would otherwise grow this map without bound.
-                    // Dropping the record degrades to the pre-emulation behaviour (no invalidate)
-                    // rather than invalidating work that may still be running.
+                    // Dropping the record degrades to no cache maintenance rather than
+                    // invalidating work that may still be running.
                     static std::atomic<uint64_t> sEmulatedCompletionDrops{0};
                     const uint64_t n = ++sEmulatedCompletionDrops;
                     if (n == 1 || (n & (n - 1)) == 0) {
                         GFXSTREAM_WARNING(
-                            "EMULATED-COHERENT: %zu completions pending, not tracking fence %p "
-                            "(drop #%llu); this submission gets no invalidate",
+                            "HOSTPTR-INVALIDATE: %zu completions pending, not tracking fence %p "
+                            "(drop #%llu); this submission gets no cache maintenance",
                             mEmulatedCompletions.size(), fence, (unsigned long long)n);
                     }
                     return;
@@ -1095,40 +1181,55 @@ edit(
                                    VK_WHOLE_SIZE};
     }
 
-    std::vector<VkMappedMemoryRange> takeEmulatedCompletionRangesLocked(
-        VkDevice device, const VkFence* fences, uint32_t fenceCount) REQUIRES(mMutex) {
-        std::vector<VkMappedMemoryRange> ranges;
+    PendingMaintenance takeEmulatedCompletionMaintenanceLocked(VkDevice device,
+                                                               const VkFence* fences,
+                                                               uint32_t fenceCount)
+        REQUIRES(mMutex) {
+        PendingMaintenance maintenance;
         for (uint32_t i = 0; i < fenceCount; ++i) {
             auto it = mEmulatedCompletions.find(fences[i]);
             if (it == mEmulatedCompletions.end()) continue;
             if (it->second.device != device) continue;
+            if (maintenance.device == VK_NULL_HANDLE) maintenance.device = it->second.device;
             for (VkDeviceMemory memory : it->second.memories) {
-                // A freed memory must never reach the driver; the record is only a hint about
-                // what was in flight, not ownership.
-                if (mMemoryInfo.find(memory) == mMemoryInfo.end()) continue;
-                ranges.push_back(emulatedWholeRange(memory));
+                appendCacheMaintenanceLocked(memory, &maintenance);
             }
             mEmulatedCompletions.erase(it);
         }
-        return ranges;
+        return maintenance;
     }
 
-    std::vector<VkMappedMemoryRange> takeEmulatedCompletionRangesForQueueLocked(
-        VkQueue queue, VkDevice* outDevice) REQUIRES(mMutex) {
-        std::vector<VkMappedMemoryRange> ranges;
+    PendingMaintenance takeEmulatedCompletionMaintenanceForQueueLocked(VkQueue queue)
+        REQUIRES(mMutex) {
+        PendingMaintenance maintenance;
         for (auto it = mEmulatedCompletions.begin(); it != mEmulatedCompletions.end();) {
             if (it->second.queue != queue) {
                 ++it;
                 continue;
             }
-            if (outDevice && *outDevice == VK_NULL_HANDLE) *outDevice = it->second.device;
+            if (maintenance.device == VK_NULL_HANDLE) maintenance.device = it->second.device;
             for (VkDeviceMemory memory : it->second.memories) {
-                if (mMemoryInfo.find(memory) == mMemoryInfo.end()) continue;
-                ranges.push_back(emulatedWholeRange(memory));
+                appendCacheMaintenanceLocked(memory, &maintenance);
             }
             it = mEmulatedCompletions.erase(it);
         }
-        return ranges;
+        return maintenance;
+    }
+
+    // The one place the owed work is applied. The Vulkan mapped-range call stays behind the
+    // coherent feature; host-pointer cache maintenance runs in every configuration, which is the
+    // point: with the feature off the guest is told a cached type is coherent and never
+    // invalidates, so only the host can.
+    void applyCacheMaintenance(VulkanDispatch* vk, const PendingMaintenance& maintenance) {
+        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled() &&
+            maintenance.device != VK_NULL_HANDLE && !maintenance.vulkanRanges.empty()) {
+            vk->vkInvalidateMappedMemoryRanges(maintenance.device,
+                                               static_cast<uint32_t>(maintenance.vulkanRanges.size()),
+                                               maintenance.vulkanRanges.data());
+        }
+        for (const auto& range : maintenance.hostPointerRanges) {
+            host_pointer_cache::invalidate(range.base, range.size);
+        }
     }
 
     // Consumes only fences the driver reports signalled. A waitAny success or a timeout says
@@ -1136,7 +1237,6 @@ edit(
     void invalidateEmulatedCompletionsAfterWait(VkDevice device, VulkanDispatch* vk,
                                                 const VkFence* pFences, uint32_t fenceCount,
                                                 VkBool32 waitAll, VkResult waitResult) {
-        if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;
         if (waitResult != VK_SUCCESS && waitResult != VK_TIMEOUT) return;
         std::vector<VkFence> candidates;
         {
@@ -1157,22 +1257,18 @@ edit(
             }
         }
         if (completed.empty()) return;
-        std::vector<VkMappedMemoryRange> ranges;
+        PendingMaintenance maintenance;
         {
             std::lock_guard<std::mutex> lock(mMutex);
-            ranges = takeEmulatedCompletionRangesLocked(device, completed.data(),
-                                                        static_cast<uint32_t>(completed.size()));
+            maintenance = takeEmulatedCompletionMaintenanceLocked(
+                device, completed.data(), static_cast<uint32_t>(completed.size()));
         }
-        if (!ranges.empty()) {
-            vk->vkInvalidateMappedMemoryRanges(device, static_cast<uint32_t>(ranges.size()),
-                                               ranges.data());
-        }
+        applyCacheMaintenance(vk, maintenance);
     }
 
     // A semaphore wait names no fence, so this only drains records whose own fence is already
-    // signalled. It never invalidates work that has not completed.
+    // signalled. It never touches work that has not completed.
     void drainSignalledEmulatedCompletions(VkDevice device, VulkanDispatch* vk) {
-        if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;
         std::vector<VkFence> candidates;
         {
             std::lock_guard<std::mutex> lock(mMutex);
@@ -1187,16 +1283,13 @@ edit(
             if (vk->vkGetFenceStatus(device, fence) == VK_SUCCESS) completed.push_back(fence);
         }
         if (completed.empty()) return;
-        std::vector<VkMappedMemoryRange> ranges;
+        PendingMaintenance maintenance;
         {
             std::lock_guard<std::mutex> lock(mMutex);
-            ranges = takeEmulatedCompletionRangesLocked(device, completed.data(),
-                                                        static_cast<uint32_t>(completed.size()));
+            maintenance = takeEmulatedCompletionMaintenanceLocked(
+                device, completed.data(), static_cast<uint32_t>(completed.size()));
         }
-        if (!ranges.empty()) {
-            vk->vkInvalidateMappedMemoryRanges(device, static_cast<uint32_t>(ranges.size()),
-                                               ranges.data());
-        }
+        applyCacheMaintenance(vk, maintenance);
     }""",
 )
 
@@ -1205,20 +1298,16 @@ edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     """        imageInfo->memory = memory;""",
     """        imageInfo->memory = memory;
-        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
-            bindToImageLocked(memoryInfo, image, memoryOffset, VK_WHOLE_SIZE);
-        }""",
+        // Unconditional: the host-pointer path needs the extents with the coherent feature off.
+        bindToImageLocked(memoryInfo, image, memoryOffset, VK_WHOLE_SIZE);""",
 )
 
 edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     """                imageInfo->memory = pBindInfos[i].memory;""",
     """                imageInfo->memory = pBindInfos[i].memory;
-                if (m_vkEmulation->getFeatures()
-                        .VulkanDisableCoherentMemoryAndEmulate.enabled()) {
-                    bindToImageLocked(memoryInfo, pBindInfos[i].image,
-                                      pBindInfos[i].memoryOffset, VK_WHOLE_SIZE);
-                }""",
+                bindToImageLocked(memoryInfo, pBindInfos[i].image,
+                                  pBindInfos[i].memoryOffset, VK_WHOLE_SIZE);""",
 )
 
 edit(
@@ -1228,12 +1317,28 @@ edit(
         mImageInfo.erase(image);""",
     """        destroyImageWithExclusiveInfo(device, deviceDispatch, image, imageInfo);
 
-        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
-            auto* memoryInfo = gfxstream::base::find(mMemoryInfo, imageInfo.memory);
-            if (memoryInfo) unbindFromImageLocked(memoryInfo, image);
-        }
+        auto* memoryInfo = gfxstream::base::find(mMemoryInfo, imageInfo.memory);
+        if (memoryInfo) unbindFromImageLocked(memoryInfo, image);
 
         mImageInfo.erase(image);""",
+)
+
+# Buffer ranges were tracked only while the coherent feature was on. Track them unconditionally
+# too: the host-pointer maintenance path needs the extents with the feature off.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            bindToBufferLocked(memoryInfo, buffer, memoryOffset, bufferInfo->size);
+        }""",
+    """        bindToBufferLocked(memoryInfo, buffer, memoryOffset, bufferInfo->size);""",
+)
+
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    """        if (memoryInfo && m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+            unbindFromBufferLocked(memoryInfo, buffer);
+        }""",
+    """        if (memoryInfo) unbindFromBufferLocked(memoryInfo, buffer);""",
 )
 
 # Replace the buffer-only pre-submit flush with the tracked set (buffers and images), and record
@@ -1271,17 +1376,15 @@ edit(
             }
         }""",
     """        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
-            std::vector<VkDeviceMemory> emulatedMemories;
+            // Clean side of the contract, and only for memory this host mapped itself: the
+            // mapped-range call is illegal on a host-pointer import, which is why those are
+            // maintained directly on the completion side instead.
+            std::vector<VkMappedMemoryRange> memoryRangesToFlush;
             {
                 std::lock_guard<std::mutex> lock(mMutex);
-                emulatedMemories = collectEmulatedMemoriesLocked(device);
+                memoryRangesToFlush = collectVulkanFlushRangesLocked(device);
             }
-            if (!emulatedMemories.empty()) {
-                std::vector<VkMappedMemoryRange> memoryRangesToFlush;
-                memoryRangesToFlush.reserve(emulatedMemories.size());
-                for (VkDeviceMemory memory : emulatedMemories) {
-                    memoryRangesToFlush.push_back(emulatedWholeRange(memory));
-                }
+            if (!memoryRangesToFlush.empty()) {
                 vk->vkFlushMappedMemoryRanges(device,
                                               static_cast<uint32_t>(memoryRangesToFlush.size()),
                                               memoryRangesToFlush.data());
@@ -1302,11 +1405,10 @@ edit(
             usedFence = builder.CreateFenceForOp();
         }
 
-        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
-            // Recorded against the fence the guest waits on, so the deferred (canDispatch=false)
-            // path below is covered: it dispatches later with this same fence.
-            recordEmulatedCompletion(device, queue, usedFence);
-        }""",
+        // Recorded against the fence the guest waits on, so the deferred (canDispatch=false)
+        // path below is covered: it dispatches later with this same fence. Recorded with the
+        // coherent feature off too: host-pointer imports need the maintenance either way.
+        recordEmulatedCompletion(device, queue, usedFence);""",
 )
 
 # Completion hooks. vkWaitForFences is the only place the guest learns the GPU finished, so it
@@ -1343,21 +1445,15 @@ edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     """        return vk->vkQueueWaitIdle(queue);""",
     """        const VkResult idleResult = vk->vkQueueWaitIdle(queue);
-        if (idleResult == VK_SUCCESS &&
-            m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+        if (idleResult == VK_SUCCESS) {
             // Every submission on this queue has completed, including the host-created fences of
             // submissions the guest passed no fence for.
-            std::vector<VkMappedMemoryRange> ranges;
-            VkDevice queueDevice = VK_NULL_HANDLE;
+            PendingMaintenance maintenance;
             {
                 std::lock_guard<std::mutex> lock(mMutex);
-                ranges = takeEmulatedCompletionRangesForQueueLocked(queue, &queueDevice);
+                maintenance = takeEmulatedCompletionMaintenanceForQueueLocked(queue);
             }
-            if (!ranges.empty()) {
-                vk->vkInvalidateMappedMemoryRanges(queueDevice,
-                                                   static_cast<uint32_t>(ranges.size()),
-                                                   ranges.data());
-            }
+            applyCacheMaintenance(vk, maintenance);
         }
         return idleResult;""",
 )
@@ -1418,6 +1514,22 @@ edit(
         VkResult result = vk->vkAllocateMemory(device, &localAllocInfo, nullptr, pMemory);''',
 )
 
+# Remember host-pointer imports so the completion path can maintain their CPU caches. The final
+# chain is the only place that knows: SystemBlob, the ColorBuffer/Buffer aliases and the private
+# allocation all reach the driver through different producers, and only some of them are host
+# pointers. A VkDevice the host never vkMapMemory'd cannot be driven through
+# vkFlushMappedMemoryRanges/vkInvalidateMappedMemoryRanges, so this address is what the
+# maintenance path needs instead.
+edit(
+    "host/vulkan/vk_decoder_global_state.cpp",
+    '''        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;''',
+    '''        memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;
+        if (actualHostImport && actualHostImport->pHostPointer) {
+            memoryInfo.importedHostPointer = actualHostImport->pHostPointer;
+            memoryInfo.importedHostPointerSize = localAllocInfo.allocationSize;
+        }''',
+)
+
 # Internal HostAllocation aliases also validate their actual final chain. No fd
 # duplicate/AHB acquire is possible in this switch case; existing failure cleanup
 # below handles the other cases. The external pointer remains borrowed.
@@ -1442,6 +1554,66 @@ edit(
     if (res == VK_SUCCESS) {
         res = vk->vkAllocateMemory(targetDevice, &allocInfo, nullptr, out);
     }''',
+)
+
+# Bounded evidence for the guest's own cache maintenance. The coherent contract only has work to
+# do when the guest believes it does not need these calls, so counting them turns "the guest
+# never flushes" from an assumption into a log line. Counted at the opcode, before any host-side
+# translation, and capped so a per-frame guest cannot flood the stream.
+decoder_cpp = root / "host/vulkan/vk_decoder.cpp"
+decoder_cpp_text = decoder_cpp.read_text(encoding="utf-8")
+if "#include <atomic>" not in decoder_cpp_text:
+    edit("host/vulkan/vk_decoder.cpp", "#include <cstdlib>",
+         "#include <atomic>\n#include <cstdlib>")
+
+edit(
+    "host/vulkan/vk_decoder.cpp",
+    """                if (m_logCalls) {
+                    GFXSTREAM_INFO(
+                        "stream %p: call vkFlushMappedMemoryRanges 0x%llx 0x%llx 0x%llx ", ioStream,
+                        (unsigned long long)device, (unsigned long long)memoryRangeCount,
+                        (unsigned long long)pMemoryRanges);
+                }""",
+    """                if (m_logCalls) {
+                    GFXSTREAM_INFO(
+                        "stream %p: call vkFlushMappedMemoryRanges 0x%llx 0x%llx 0x%llx ", ioStream,
+                        (unsigned long long)device, (unsigned long long)memoryRangeCount,
+                        (unsigned long long)pMemoryRanges);
+                }
+                {
+                    static std::atomic<uint32_t> sGuestFlushCalls{0};
+                    const uint32_t call = sGuestFlushCalls.fetch_add(1);
+                    if (call < 8) {
+                        GFXSTREAM_INFO("GUEST-CACHE-OP: opcode=vkFlushMappedMemoryRanges "
+                                       "call=%u rangeCount=%u",
+                                       call + 1, memoryRangeCount);
+                    }
+                }""",
+)
+
+edit(
+    "host/vulkan/vk_decoder.cpp",
+    """                if (m_logCalls) {
+                    GFXSTREAM_INFO(
+                        "stream %p: call vkInvalidateMappedMemoryRanges 0x%llx 0x%llx 0x%llx ",
+                        ioStream, (unsigned long long)device, (unsigned long long)memoryRangeCount,
+                        (unsigned long long)pMemoryRanges);
+                }""",
+    """                if (m_logCalls) {
+                    GFXSTREAM_INFO(
+                        "stream %p: call vkInvalidateMappedMemoryRanges 0x%llx 0x%llx 0x%llx ",
+                        ioStream, (unsigned long long)device, (unsigned long long)memoryRangeCount,
+                        (unsigned long long)pMemoryRanges);
+                }
+                {
+                    static std::atomic<uint32_t> sGuestInvalidateCalls{0};
+                    const uint32_t call = sGuestInvalidateCalls.fetch_add(1);
+                    if (call < 8) {
+                        GFXSTREAM_INFO("GUEST-CACHE-OP: opcode=vkInvalidateMappedMemoryRanges "
+                                       "call=%u rangeCount=%u",
+                                       call + 1, memoryRangeCount);
+                    }
+                }""",
 )
 
 # external_memory.cpp already defaults to AndroidAHB: verify, do not modify it.

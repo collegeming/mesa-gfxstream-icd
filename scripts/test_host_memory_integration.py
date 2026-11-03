@@ -113,26 +113,70 @@ assert 'if (res != VK_SUCCESS && importedFd >= 0) close(importedFd);' in alias
 # Image ranges are tracked next to buffer ranges, in both bind entry points and on destroy.
 assert 'std::unordered_map<VkBuffer, BoundMemoryRange> bufferMemoryRanges;' in structs
 assert 'std::unordered_map<VkImage, BoundMemoryRange> imageMemoryRanges;' in structs
+assert 'void* importedHostPointer = nullptr;' in structs
+assert 'VkDeviceSize importedHostPointerSize = 0;' in structs
 assert decoder.count('bindToImageLocked(') == 3  # definition + both bind paths
 assert decoder.count('unbindFromImageLocked(') == 2  # definition + destroyImageLocked
 assert 'bindToImageLocked(memoryInfo, image, memoryOffset, VK_WHOLE_SIZE);' in decoder
 assert 'bindToImageLocked(memoryInfo, pBindInfos[i].image,' in decoder
 assert 'unbindFromImageLocked(memoryInfo, image);' in decoder
-assert 'if (info.bufferMemoryRanges.empty() && info.imageMemoryRanges.empty()) continue;' in decoder
-# Only memory this host mapped itself may be driven through the mapped-range cache calls.
+# Range bookkeeping is unconditional: the host-pointer path needs the extents with the coherent
+# feature switched off, which is the configuration the device runs.
+for bind_site in [
+    'bindToBufferLocked(memoryInfo, buffer, memoryOffset, bufferInfo->size);',
+    'unbindFromBufferLocked(memoryInfo, buffer);',
+    'bindToImageLocked(memoryInfo, image, memoryOffset, VK_WHOLE_SIZE);',
+]:
+    assert bind_site in decoder
+assert 'if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {\n            bindToBufferLocked(' not in decoder
+assert 'if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {\n            bindToImageLocked(' not in decoder
+# The host-pointer import is recorded from the final chain, so SystemBlob, both aliases and the
+# private allocation are all covered by the same field.
+assert 'if (actualHostImport && actualHostImport->pHostPointer) {' in decoder
+assert 'memoryInfo.importedHostPointer = actualHostImport->pHostPointer;' in decoder
+assert 'memoryInfo.importedHostPointerSize = localAllocInfo.allocationSize;' in decoder
+assert (allocation.index('memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;') <
+        allocation.index('memoryInfo.importedHostPointer = actualHostImport->pHostPointer;'))
+# The cache-maintenance helper is embedded exactly once and drives the CPU caches directly.
+cache_helper = (scripts / 'host_pointer_cache.h').read_text(encoding='utf-8').replace('#pragma once\n', '')
+assert decoder.count(cache_helper) == 1
+assert 'host_pointer_cache::invalidate(range.base, range.size);' in decoder
+assert 'dc civac' in cache_helper and 'dc cvac' in cache_helper
+assert 'mrs %0, ctr_el0' in cache_helper
+# The helper never issues a Vulkan mapped-range call: these pages are not mapped by this host.
+assert 'vk->vkFlushMappedMemoryRanges' not in cache_helper
+assert 'vk->vkInvalidateMappedMemoryRanges' not in cache_helper
+assert '__builtin___clear_cache' in cache_helper  # Portable fallback for non-AArch64 hosts.
+# Only memory this host mapped itself may be driven through the Vulkan mapped-range calls.
 assert 'if (!info.needUnmap || !info.ptr) continue;' in decoder
 assert 'TODO(b/424729656): this logic should run only for emulated memory' not in decoder
 assert 'TODO(b/424729656): Invalidate might be necessary around a fence.' not in decoder
+flush_collect = decoder[decoder.index('    std::vector<VkMappedMemoryRange> collectVulkanFlushRangesLocked('):]
+flush_collect = flush_collect[:flush_collect.index('    // Appends the maintenance owed for one memory.')]
+assert 'importedHostPointer' not in flush_collect
+assert 'if (!info.needUnmap || !info.ptr) continue;' in flush_collect
 # Completion records are fence-keyed and bounded, and the invalidate never runs under mMutex.
 assert decoder.count('recordEmulatedCompletion(') == 2  # definition + submit
 assert decoder.count('invalidateEmulatedCompletionsAfterWait(') == 3  # definition + 2 wait hooks
 assert decoder.count('drainSignalledEmulatedCompletions(') == 2  # definition + vkWaitSemaphores
-assert decoder.count('takeEmulatedCompletionRangesForQueueLocked(') == 2
-assert decoder.count('vkInvalidateMappedMemoryRanges(') == 3  # after-wait, queue-idle, drain
+assert decoder.count('takeEmulatedCompletionMaintenanceLocked(') == 3
+assert decoder.count('takeEmulatedCompletionMaintenanceForQueueLocked(') == 2
+assert decoder.count('collectCacheMaintenanceMemoriesLocked(') == 2
+assert decoder.count('collectVulkanFlushRangesLocked(') == 2
+assert decoder.count('applyCacheMaintenance(') == 4  # definition + wait + queue-idle + drain
+assert decoder.count('vkInvalidateMappedMemoryRanges(') == 1  # only inside applyCacheMaintenance
 assert 'static constexpr size_t kMaxEmulatedCompletions = 64;' in decoder
 assert 'if (mEmulatedCompletions.size() >= kMaxEmulatedCompletions) {' in decoder
-assert 'if (mMemoryInfo.find(memory) == mMemoryInfo.end()) continue;' in decoder
+assert 'if (it == mMemoryInfo.end()) return; // Freed memory never reaches the driver.' in decoder
 assert 'return VkMappedMemoryRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory, 0,' in decoder
+# The two gates are independent: the Vulkan call needs the feature, the CPU maintenance does not.
+apply = decoder[decoder.index('    void applyCacheMaintenance(VulkanDispatch* vk,'):]
+apply = apply[:apply.index('    // Consumes only fences the driver reports signalled.')]
+assert apply.index('VulkanDisableCoherentMemoryAndEmulate.enabled()') < apply.index(
+    'vk->vkInvalidateMappedMemoryRanges(')
+assert apply.index('host_pointer_cache::invalidate(') > apply.index(
+    'vk->vkInvalidateMappedMemoryRanges(')
+assert 'if (!m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) return;' not in decoder
 submit = decoder[decoder.index('    VkResult on_vkQueueSubmit('):]
 submit = submit[:submit.index('    VkResult on_vkQueueWaitIdle(')]
 flush = submit.index('vkFlushMappedMemoryRanges(')
@@ -140,7 +184,10 @@ fence = submit.index('usedFence = builder.CreateFenceForOp();')
 record = submit.index('recordEmulatedCompletion(device, queue, usedFence);')
 dispatch = submit.index('auto result = dispatchVkQueueSubmit(vk, queue, submitCount, pSubmits, usedFence')
 assert flush < fence < record < dispatch
-assert 'collectEmulatedMemoriesLocked(device);' in submit
+assert 'collectVulkanFlushRangesLocked(device);' in submit
+# The record is taken whether or not the coherent feature is enabled.
+record_block = submit[submit.rindex('usedFence = builder.CreateFenceForOp();'):record]
+assert 'VulkanDisableCoherentMemoryAndEmulate' not in record_block
 wait_fences = decoder[decoder.index('    VkResult on_vkWaitForFences('):]
 wait_fences = wait_fences[:wait_fences.index('    VkResult on_vkResetFences(')]
 assert (wait_fences.index('waitForFences(device, vk, fenceCount, pFences, waitAll, timeout, false)') <
@@ -159,7 +206,8 @@ assert (fence_status.index('vk->vkGetFenceStatus(device, fence)') <
 queue_idle = decoder[decoder.index('    VkResult on_vkQueueWaitIdle('):]
 queue_idle = queue_idle[:queue_idle.index('    VkResult on_vkResetCommandBuffer(')]
 assert 'const VkResult idleResult = vk->vkQueueWaitIdle(queue);' in queue_idle
-assert queue_idle.index('vk->vkQueueWaitIdle(queue)') < queue_idle.index('vkInvalidateMappedMemoryRanges(')
+assert queue_idle.index('vk->vkQueueWaitIdle(queue)') < queue_idle.index('applyCacheMaintenance(')
+assert 'VulkanDisableCoherentMemoryAndEmulate' not in queue_idle
 semaphores = decoder[decoder.index('    VkResult on_vkWaitSemaphores('):]
 semaphores = semaphores[:semaphores.index('    VkResult onSemaphoreSignalledOnSharedQueue(')]
 assert 'if (waitResult == VK_SUCCESS) {' in semaphores
@@ -168,7 +216,23 @@ assert semaphores.index('vkWaitSemaphores(device, pWaitInfo, timeout)') < semaph
 # An unconfirmed fence is never consumed by a wait that did not prove completion.
 assert 'const bool allListed = waitAll && waitResult == VK_SUCCESS;' in decoder
 assert 'vk->vkGetFenceStatus(device, fence) == VK_SUCCESS' in decoder
+# Bounded evidence for the guest's own cache maintenance, at both opcodes.
+wire = (source / 'host/vulkan/vk_decoder.cpp').read_text(encoding='utf-8')
+assert wire.count('GUEST-CACHE-OP') == 2
+assert 'opcode=vkFlushMappedMemoryRanges' in wire
+assert 'opcode=vkInvalidateMappedMemoryRanges' in wire
+assert wire.count('if (call < 8) {') == 2  # Bounded: eight lines each, then silence.
+assert '#include <atomic>' in wire
+flush_opcode = wire[wire.index('case OP_vkFlushMappedMemoryRanges: {'):]
+flush_opcode = flush_opcode[:flush_opcode.index('case OP_vkInvalidateMappedMemoryRanges: {')]
+assert 'GUEST-CACHE-OP: opcode=vkFlushMappedMemoryRanges' in flush_opcode
+assert flush_opcode.index('memoryRangeCount') < flush_opcode.index('GUEST-CACHE-OP')
+invalidate_opcode = wire[wire.index('case OP_vkInvalidateMappedMemoryRanges: {'):]
+assert 'GUEST-CACHE-OP: opcode=vkInvalidateMappedMemoryRanges' in invalidate_opcode
+assert 'vk->vkInvalidateMappedMemoryRanges(unboxed_device' in invalidate_opcode
 print('PASS: exact tested helper in both TUs; four final-chain pointer producers guarded once; old fallback absent')
 print('PASS: unconditional physical coherent guard before fd/pool/backing acquisition; alias host index never re-mapped; emulation waiver bounded to cached+tracked shapes; native coherent not disabled')
 print('PASS: exclusive pointer/fd/pool producers asserted; defensive mixed-chain owned cleanup; borrowed aliases never freed')
 print('PASS: image ranges tracked on both bind paths and dropped on destroy; flush covers buffers and images; invalidate only after a confirmed completion')
+print('PASS: host-pointer imports recorded from the final chain, maintained with dc civac at every completion boundary regardless of the coherent feature; Vulkan mapped-range calls stay behind the feature and off host-pointer memory')
+print('PASS: guest vkFlushMappedMemoryRanges/vkInvalidateMappedMemoryRanges opcodes counted with an eight-line bound')

@@ -22,6 +22,7 @@ on:
       - 'scripts/staging_contract.h'
       - 'scripts/test_staging_contract.cpp'
       - 'scripts/host_memory_contract.h'
+      - 'scripts/host_pointer_cache.h'
       - 'scripts/test_host_memory_contract.cpp'
       - 'scripts/test_host_memory_integration.py'
       - 'scripts/*native_backing*'
@@ -121,6 +122,7 @@ jobs:
           cp ci/scripts/dmabuf_import_guard.h ci/scripts/test_dmabuf_import_guard.cpp out/
           cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
           cp ci/scripts/host_memory_contract.h ci/scripts/test_host_memory_contract.cpp out/
+          cp ci/scripts/host_pointer_cache.h out/
           cp ci/scripts/test_host_memory_integration.py out/
           cp ci/scripts/*native_backing* out/
           cp ci/scripts/*native_roundtrip* out/
@@ -434,6 +436,8 @@ jobs:
                   "Alias preflight resolves the ColorBuffer/Buffer stored HOST index in host index space instead of re-mapping it as a guest index",
                   "Coherent rejection waived only when VulkanDisableCoherentMemoryAndEmulate is enabled, the physical type is HOST_CACHED, and the allocation shape is tracked; no index or flag rewrite",
                   "Image bind ranges tracked beside buffer ranges; pre-submit flush covers both; post-completion invalidate keyed on the fence the guest waits on",
+                  "Host-pointer imports (SystemBlob, aliases, private allocation) record their host address and extent; completion boundaries run dc civac over the tracked ranges or the whole allocation, independent of VulkanDisableCoherentMemoryAndEmulate",
+                  "Guest vkFlushMappedMemoryRanges and vkInvalidateMappedMemoryRanges opcodes counted with an eight-line bound",
                   "Bounded CIB1 activation diagnostics only: capset/readiness/query/create metadata, 8 records per site, no driver calls, stores, extra queries or return-value changes",
                   "CIB1 readiness no longer requires default probe-list RGBA/BGRA support; real per-format native AHB query and alias creation remain fail-closed",
                   "Add MUTABLE-only BGRA8/RGBA8 default image-support combos so guest classic BGRA8 ColorBuffers can be created before CIB alias; real native AHB query remains authoritative",
@@ -455,14 +459,17 @@ jobs:
                   "ownership": "helper borrows pointer only; private/shared backing RAII retained; local owned fd/pool cleaned on defensive mixed-chain rejection",
                   "native_coherent": "permitted subject to exact import compatibility; masks do not generalize across exporters",
                   "cache_maintenance": {
-                      "flush": "whole tracked allocations (offset 0, VK_WHOLE_SIZE) before dispatch, buffers and images alike",
+                      "flush": "whole tracked allocations (offset 0, VK_WHOLE_SIZE) before dispatch, buffers and images alike; Vulkan mapped-range call only, so host-pointer imports are excluded",
                       "invalidate": "after a fence the driver reports signalled (vkWaitForFences, vkGetFenceStatus), after vkQueueWaitIdle for that queue, and opportunistically after a successful vkWaitSemaphores",
-                      "eligible_memory": "only memory this host mapped itself (vkMapMemory); imported or shared-memory backed allocations are excluded because the mapped-range calls would be invalid on them",
+                      "eligible_memory": "Vulkan mapped-range calls only on memory this host vkMapMemory'd; host-pointer imports are maintained with dc civac over the import range instead, and never through the Vulkan call",
+                      "host_pointer": "recorded from the final allocation chain (SystemBlob, both aliases, private allocation); tracked buffer/image ranges are used when bound, whole allocation otherwise; dc civac + dsb ish on AArch64, __builtin___clear_cache elsewhere; independent of VulkanDisableCoherentMemoryAndEmulate",
+                      "guest_cache_opcodes": "bounded to eight lines each: GUEST-CACHE-OP opcode=vkFlushMappedMemoryRanges|vkInvalidateMappedMemoryRanges with the range count",
                       "bound": "64 pending completion records; overflow drops the record and logs instead of invalidating unfinished work",
-                      "gap": "alias ColorBuffer/Buffer imports carry an externally supplied mapped pointer and are therefore allowed by the waiver but not yet cache-maintained; closing that needs a ColorBuffer-side flush/invalidate in VkEmulation. Semaphore-only completion is only drained opportunistically."
+                      "gap": "the clean direction (dc cvac before dispatch) for host-pointer imports is not implemented; only the invalidate side is. Alias ColorBuffer/Buffer imports carry an externally supplied mapped pointer and are maintained through the same host-pointer path. Semaphore-only completion is only drained opportunistically."
                   },
                   "sha256": {name: hashlib.sha256(Path('out', name).read_bytes()).hexdigest()
-                             for name in ['host_memory_contract.h', 'test_host_memory_contract.cpp',
+                             for name in ['host_memory_contract.h', 'host_pointer_cache.h',
+                                          'test_host_memory_contract.cpp',
                                           'test_host_memory_integration.py', 'host-memory-contract-tests.txt']}
               },
               "native_backing_lease": {
