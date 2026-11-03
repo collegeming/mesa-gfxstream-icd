@@ -139,10 +139,14 @@ print('CIB guest descriptor scan patched')
 #    hands the descriptor over for MEM_GUEST blobs; retaining it lets the
 #    writeback reach the guest pages of the compositor's scanout buffer.
 edit('host/virtio_gpu_resource.cpp',
-     '''    } else if (features.ExternalBlob.enabled()) {
+     '''    } else if (features.ExternalBlob.enabled() ||
+               (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
+                (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE))) {
         if (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
             (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE)) {''',
-     '''    } else if (features.ExternalBlob.enabled()) {
+     '''    } else if (features.ExternalBlob.enabled() ||
+               (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
+                (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE))) {
         // GUESTBLOB-FD-REGISTER: keep any guest blob descriptor the VMM handed
         // over, even without the CREATE_GUEST_HANDLE flag, so the scanout
         // writeback can reach the guest pages.
