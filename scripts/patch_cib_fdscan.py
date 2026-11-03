@@ -100,6 +100,15 @@ edit('host/vulkan/vk_decoder_global_state.cpp',
                                     for (auto& desc : descriptors) {
                                         int candFd = desc.second;
                                         struct stat st = {};
+                                        if (fstat(candFd, &st) == 0) {
+                                            if (descriptors.size() <= 16) {
+                                                GFXSTREAM_WARNING(
+                                                    "CIB-WRITEBACK: cand res=%u size=%lld "
+                                                    "want=%zu",
+                                                    desc.first, (long long)st.st_size,
+                                                    bytes.size());
+                                            }
+                                        }
                                         if (fstat(candFd, &st) == 0 &&
                                             (uint64_t)st.st_size == bytes.size()) {
                                             void* candDst =
@@ -125,3 +134,28 @@ edit('host/vulkan/vk_decoder_global_state.cpp',
                                 } else {''')
 
 print('CIB guest descriptor scan patched')
+
+# 5) Register guest blob descriptors even without CREATE_GUEST_HANDLE. The VMM
+#    hands the descriptor over for MEM_GUEST blobs; retaining it lets the
+#    writeback reach the guest pages of the compositor's scanout buffer.
+edit('host/virtio_gpu_resource.cpp',
+     '''    } else if (features.ExternalBlob.enabled()) {
+        if (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
+            (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE)) {''',
+     '''    } else if (features.ExternalBlob.enabled()) {
+        // GUESTBLOB-FD-REGISTER: keep any guest blob descriptor the VMM handed
+        // over, even without the CREATE_GUEST_HANDLE flag, so the scanout
+        // writeback can reach the guest pages.
+        if (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST && handle &&
+            (int)handle->os_handle >= 0) {
+            ExternalObjectManager::get()->addGuestBlobResourceDescriptor(
+                resourceId, (int)handle->os_handle);
+            GFXSTREAM_DIAG_PRINT("GUESTBLOB-FD-REGISTER: resource=%u fd=%d size=%llu\\n",
+                                 resourceId, (int)handle->os_handle,
+                                 (unsigned long long)createBlobArgs->size);
+        }
+        if (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
+            (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE)) {''')
+
+print('guest blob descriptor registration patched')
+
