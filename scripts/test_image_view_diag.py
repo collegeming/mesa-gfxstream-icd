@@ -51,6 +51,10 @@ assert 'freeMemoryLocked(device, deviceDispatch, memory);' in dec
 assert dec.count('fetch_add(1, std::memory_order_relaxed) < 512') == 7
 assert dec.count('fetch_add(1, std::memory_order_relaxed) < 64') == 1
 
+ops = read('host/vulkan/vk_decoder.cpp')
+assert ops.count('IV-DIAG-OP:') == 1
+assert ops.count('GFXSTREAM_IV_DIAG') == 1
+
 assert workflow.index('patch_cib_buffer_dmabuf_export.py') < workflow.index(
     'patch_image_view_diag.py')
 assert workflow.index('patch_image_view_diag.py') < workflow.index(
