@@ -1075,9 +1075,42 @@ edit(
         return memories;
     }
 
-    // The pre-submit clean set: memory this host mapped itself, with at least one tracked range.
-    // Host-pointer imports are deliberately absent -- vkFlushMappedMemoryRanges on a VkDevice
-    // the host never mapped is not legal, and their clean side is not implemented here.
+    // Opt-in dirty-line writeback for host-pointer imports, done before a submit so the GPU sees
+    // what the guest CPU wrote. The guest is told the cached type is coherent and never flushes,
+    // so without this the only host-side maintenance is the completion invalidate, which cleans
+    // up reads but cannot make CPU writes visible to the GPU. "buffers" covers the vertex,
+    // uniform and staging allocations that carry CPU-written data; "all" adds host-visible
+    // images. Off unless GFXSTREAM_HOSTPTR_PRESUBMIT_CLEAN names a mode: walking every import on
+    // every submit has a measurable cost.
+    static const char* hostPointerPreSubmitCleanMode() {
+        static const char* const mode = []() -> const char* {
+            const char* value = getenv("GFXSTREAM_HOSTPTR_PRESUBMIT_CLEAN");
+            if (!value || !*value || value[0] == '0') return nullptr;
+            return value;
+        }();
+        return mode;
+    }
+
+    void collectHostPointerCleanRangesLocked(VkDevice device, PendingMaintenance* out)
+        REQUIRES(mMutex) {
+        const char* mode = hostPointerPreSubmitCleanMode();
+        if (!mode) return;
+        // Modes: "buffers" (default when any value is set) or "all".
+        const bool includeImages = mode[0] == 'a';
+        for (auto& it : mMemoryInfo) {
+            auto& info = it.second;
+            if (info.device != device) continue;
+            if (!info.importedHostPointer || !info.importedHostPointerSize) continue;
+            if (info.bufferMemoryRanges.empty() && info.imageMemoryRanges.empty()) continue;
+            if (!includeImages && info.bufferMemoryRanges.empty()) continue;
+            out->hostPointerRanges.push_back(HostPointerRange{
+                info.importedHostPointer, info.importedHostPointerSize});
+        }
+    }
+
+    // The pre-submit clean set for memory this host mapped itself, with at least one tracked
+    // range. Host-pointer imports are maintained directly instead; the mapped-range call is not
+    // legal on memory the host never mapped.
     std::vector<VkMappedMemoryRange> collectVulkanFlushRangesLocked(VkDevice device)
         REQUIRES(mMutex) {
         std::vector<VkMappedMemoryRange> ranges;
@@ -1422,7 +1455,20 @@ edit(
         // Recorded against the fence the guest waits on, so the deferred (canDispatch=false)
         // path below is covered: it dispatches later with this same fence. Recorded with the
         // coherent feature off too: host-pointer imports need the maintenance either way.
-        recordEmulatedCompletion(device, queue, usedFence);""",
+        recordEmulatedCompletion(device, queue, usedFence);
+
+        // Clean side for host-pointer imports, before the GPU consumes them. Must happen before
+        // the dispatch below so the writeback lands before any queued read.
+        {
+            PendingMaintenance prepare;
+            {
+                std::lock_guard<std::mutex> lock(mMutex);
+                collectHostPointerCleanRangesLocked(device, &prepare);
+            }
+            for (const auto& range : prepare.hostPointerRanges) {
+                host_pointer_cache::clean(range.base, range.size);
+            }
+        }""",
 )
 
 # Completion hooks. vkWaitForFences is the only place the guest learns the GPU finished, so it
