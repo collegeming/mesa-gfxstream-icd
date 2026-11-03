@@ -203,4 +203,72 @@ edit(dec, '''        uint32_t packetLen;
             }
         }''')
 
+# 7) Semaphore lifetime around the wait the crash lands on.
+edit(d, '''        std::lock_guard<std::mutex> lock(mMutex);
+        destroySemaphoreLocked(device, deviceDispatch, semaphore);''',
+     '''        std::lock_guard<std::mutex> lock(mMutex);
+        if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+            static std::atomic<uint32_t> sDiag{0};
+            if (sDiag.fetch_add(1, std::memory_order_relaxed) < 256) {
+                fprintf(stderr, "IV-DIAG-DESTROY-SEMAPHORE: device=%p semaphore=%llu\\n",
+                        static_cast<void*>(device), (unsigned long long)semaphore);
+                fflush(stderr);
+            }
+        }
+        destroySemaphoreLocked(device, deviceDispatch, semaphore);''')
+
+edit(d, '''        const VkResult waitResult = deviceDispatch->vkWaitSemaphores(device, pWaitInfo, timeout);''',
+     '''        if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+            static std::atomic<uint32_t> sDiag{0};
+            if (sDiag.fetch_add(1, std::memory_order_relaxed) < 256) {
+                char semBuf[256];
+                int semLen = 0;
+                const uint32_t shown = pWaitInfo ? std::min<uint32_t>(pWaitInfo->semaphoreCount, 3u) : 0u;
+                for (uint32_t i = 0; i < shown; ++i) {
+                    semLen += snprintf(semBuf + semLen, sizeof(semBuf) - (size_t)semLen,
+                                       " %llu/%llu", (unsigned long long)pWaitInfo->pSemaphores[i],
+                                       (unsigned long long)(pWaitInfo->pValues ? pWaitInfo->pValues[i] : 0));
+                }
+                fprintf(stderr, "IV-DIAG-WAIT-SEMAPHORES: device=%p count=%u flags=0x%x timeout=%llu%s\\n",
+                        static_cast<void*>(device), pWaitInfo ? pWaitInfo->semaphoreCount : 0u,
+                        pWaitInfo ? (unsigned)pWaitInfo->flags : 0u,
+                        (unsigned long long)timeout, semLen ? semBuf : " -");
+                fflush(stderr);
+            }
+        }
+        const VkResult waitResult = deviceDispatch->vkWaitSemaphores(device, pWaitInfo, timeout);
+        if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+            static std::atomic<uint32_t> sDiagDone{0};
+            if (sDiagDone.fetch_add(1, std::memory_order_relaxed) < 256) {
+                fprintf(stderr, "IV-DIAG-WAIT-SEMAPHORES-DONE: result=%d\\n", (int)waitResult);
+                fflush(stderr);
+            }
+        }''')
+
+# 8) The invalidate that runs right after a successful semaphore wait.
+edit(d, '''    void applyCacheMaintenance(VulkanDispatch* vk, const PendingMaintenance& maintenance) {
+        if (maintenance.device != VK_NULL_HANDLE && !maintenance.vulkanRanges.empty()) {
+            vk->vkInvalidateMappedMemoryRanges(maintenance.device,''',
+     '''    void applyCacheMaintenance(VulkanDispatch* vk, const PendingMaintenance& maintenance) {
+        if (maintenance.device != VK_NULL_HANDLE && !maintenance.vulkanRanges.empty()) {
+            if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+                static std::atomic<uint32_t> sDiag{0};
+                if (sDiag.fetch_add(1, std::memory_order_relaxed) < 256) {
+                    char memBuf[256];
+                    int memLen = 0;
+                    const uint32_t shown = std::min<uint32_t>(
+                        (uint32_t)maintenance.vulkanRanges.size(), 4u);
+                    for (uint32_t i = 0; i < shown; ++i) {
+                        memLen += snprintf(memBuf + memLen, sizeof(memBuf) - (size_t)memLen,
+                                           " %llu",
+                                           (unsigned long long)maintenance.vulkanRanges[i].memory);
+                    }
+                    fprintf(stderr, "IV-DIAG-INVALIDATE: device=%p ranges=%zu%s\\n",
+                            static_cast<void*>(maintenance.device),
+                            maintenance.vulkanRanges.size(), memBuf);
+                    fflush(stderr);
+                }
+            }
+            vk->vkInvalidateMappedMemoryRanges(maintenance.device,''')
+
 print('bounded image-view/memory lifetime diagnostics to fd 2 (GFXSTREAM_IV_DIAG=1)')
