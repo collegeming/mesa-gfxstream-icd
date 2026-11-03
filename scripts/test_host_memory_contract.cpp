@@ -392,12 +392,18 @@ int main() {
     emulatedContractCase(coherent, cached, true, VK_SUCCESS);
     // Non-covered reject: the same allocation without coverage is the original -8.
     emulatedContractCase(coherent, cached, false, VK_ERROR_FEATURE_NOT_PRESENT);
-    // A cached type is not a free pass: coherent guest against a coherent-but-uncached physical
-    // type stays rejected, because the predicate never covers a type without HOST_CACHED.
+    // The predicate never covers a type without HOST_CACHED, so no waiver exists for the
+    // coherent-but-uncached family. Such a type still satisfies the guest on its own merits:
+    // the contract is about the physical flags, not about which types the feature rewrites.
     check(!emulationCoversThisAllocation(true, uncachedCoherent,
                                          EmulatedAllocationShape::kImageRange));
-    emulatedContractCase(coherent, uncachedCoherent, false, VK_ERROR_FEATURE_NOT_PRESENT);
+    emulatedContractCase(coherent, uncachedCoherent, false, VK_SUCCESS);
     emulatedContractCase(coherent, coherent, false, VK_SUCCESS);
+    // Uncached and non-coherent: no waiver, and the physical type does not satisfy the guest.
+    const VkMemoryPropertyFlags uncachedNonCoherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    check(!emulationCoversThisAllocation(true, uncachedNonCoherent,
+                                         EmulatedAllocationShape::kImageRange));
+    emulatedContractCase(coherent, uncachedNonCoherent, false, VK_ERROR_FEATURE_NOT_PRESENT);
     // Non-coherent guests never needed the waiver.
     emulatedContractCase(nc, cached, false, VK_SUCCESS);
     emulatedContractCase(nc, cached, true, VK_SUCCESS);
