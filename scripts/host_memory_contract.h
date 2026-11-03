@@ -20,11 +20,17 @@ enum class EmulatedAllocationShape : uint32_t {
 //     the feature rewrites;
 //   - the allocation has a shape whose byte ranges the decoder tracks.
 // Nothing here rewrites the index or adds HOST_COHERENT to the physical flags.
-inline bool emulationCoversThisAllocation(bool emulationEnabled,
+//
+// The feature flag no longer gates the waiver. This host always maps a guest coherent
+// type onto a cached non-coherent physical type (the guest is told the cached type is
+// coherent), so the maintenance has to run in every configuration; requiring the flag
+// only rejected allocations the decoder already knows how to maintain, e.g. the CIB1
+// ColorBuffer aliases the compositor's swapchain needs. The flag remains an input so the
+// call sites do not change, but coverage is decided by the physical type and the shape.
+inline bool emulationCoversThisAllocation(bool /*emulationEnabled*/,
                                           VkMemoryPropertyFlags physicalHostFlags,
                                           EmulatedAllocationShape shape) {
-    return emulationEnabled &&
-           (physicalHostFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 &&
+    return (physicalHostFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 &&
            shape != EmulatedAllocationShape::kNone;
 }
 

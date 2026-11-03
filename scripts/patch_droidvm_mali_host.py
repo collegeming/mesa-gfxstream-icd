@@ -1249,13 +1249,13 @@ edit(
         return maintenance;
     }
 
-    // The one place the owed work is applied. The Vulkan mapped-range call stays behind the
-    // coherent feature; host-pointer cache maintenance runs in every configuration, which is the
-    // point: with the feature off the guest is told a cached type is coherent and never
-    // invalidates, so only the host can.
+    // The one place the owed work is applied. Neither branch is gated on the coherent feature:
+    // the guest is always told a cached type is coherent and never invalidates, so the host owes
+    // both directions in every configuration. The feature flag stays off here because turning it
+    // on changes the allocation path underneath the Mali driver (measured: SIGSEGV in
+    // libGLES_mali during niri startup), while the maintenance itself is flag-independent.
     void applyCacheMaintenance(VulkanDispatch* vk, const PendingMaintenance& maintenance) {
-        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled() &&
-            maintenance.device != VK_NULL_HANDLE && !maintenance.vulkanRanges.empty()) {
+        if (maintenance.device != VK_NULL_HANDLE && !maintenance.vulkanRanges.empty()) {
             vk->vkInvalidateMappedMemoryRanges(maintenance.device,
                                                static_cast<uint32_t>(maintenance.vulkanRanges.size()),
                                                maintenance.vulkanRanges.data());
@@ -1422,10 +1422,12 @@ edit(
                                               memoryRangesToFlush.data());
             }
         }""",
-    """        if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
+    """        {
             // Clean side of the contract, and only for memory this host mapped itself: the
             // mapped-range call is illegal on a host-pointer import, which is why those are
-            // maintained directly on the completion side instead.
+            // maintained directly on the completion side instead. Runs with the coherent
+            // feature off as well: the guest is told the cached type is coherent, so the
+            // writeback cannot come from the guest.
             std::vector<VkMappedMemoryRange> memoryRangesToFlush;
             {
                 std::lock_guard<std::mutex> lock(mMutex);
