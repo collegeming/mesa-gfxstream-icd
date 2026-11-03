@@ -188,4 +188,19 @@ edit(d, '''        std::lock_guard<std::mutex> lock(mMutex);
         }
         freeMemoryLocked(device, deviceDispatch, memory);''')
 
+# 6) The opcode stream: the last packet before the abort names the crashing command.
+dec = 'host/vulkan/vk_decoder.cpp'
+edit(dec, '#include <cstdlib>\n', '#include <cstdlib>\n#include <atomic>\n#include <cstdio>\n')
+edit(dec, '''        uint32_t packetLen;
+        std::memcpy(&packetLen, ptr + 4, sizeof(uint32_t));''',
+     '''        uint32_t packetLen;
+        std::memcpy(&packetLen, ptr + 4, sizeof(uint32_t));
+        if (gfxstream::base::getEnvironmentVariable("GFXSTREAM_IV_DIAG") == "1") {
+            static std::atomic<uint32_t> sOpDiag{0};
+            if (sOpDiag.fetch_add(1, std::memory_order_relaxed) < 400000) {
+                fprintf(stderr, "IV-DIAG-OP: opcode=%u len=%u\\n", opcode, packetLen);
+                fflush(stderr);
+            }
+        }''')
+
 print('bounded image-view/memory lifetime diagnostics to fd 2 (GFXSTREAM_IV_DIAG=1)')
