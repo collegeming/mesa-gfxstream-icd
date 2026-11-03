@@ -2,6 +2,14 @@ name: build-droidvm-mali-host
 
 on:
   workflow_dispatch:
+    inputs:
+      host_pointer_mode:
+        description: "full=current host-pointer imports; no_hostptr=baseline without VK_EXT_external_memory_host"
+        type: choice
+        options:
+          - full
+          - no_hostptr
+        default: full
   push:
     branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
     paths:
@@ -286,10 +294,16 @@ jobs:
           grep -q 'COHERENT-DOWNGRADE-ALLOW-IMPORT' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_guest_handle_without_external_blob.py source
           grep -q 'STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE' source/host/virtio_gpu_resource.cpp
-          python3 -I ci/scripts/patch_systemblob_host_pointer_type.py source
-          grep -q 'SYSBLOB-HOSTPTR' source/host/vulkan/vk_decoder_global_state.cpp
-          python3 -I ci/scripts/patch_buffer_host_pointer.py source
-          grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
+          HP_MODE="${{ inputs.host_pointer_mode }}"
+          HP_MODE="${HP_MODE:-full}"
+          if [ "$HP_MODE" = "full" ]; then
+            python3 -I ci/scripts/patch_systemblob_host_pointer_type.py source
+            grep -q 'SYSBLOB-HOSTPTR' source/host/vulkan/vk_decoder_global_state.cpp
+            python3 -I ci/scripts/patch_buffer_host_pointer.py source
+            grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
+          else
+            echo "HOSTPTR-BASELINE: skipping VK_EXT_external_memory_host patches" | tee out/hostptr-baseline.txt
+          fi
           python3 -I ci/scripts/patch_cib_color_dump.py source
           grep -q 'GFXSTREAM_CIB_DUMP_REQUEST' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_copy_diag.py source
