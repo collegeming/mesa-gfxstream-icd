@@ -323,7 +323,12 @@ edit(
         importInfoPtr ? (unsigned)((const VkBaseInStructure*)importInfoPtr)->sType : 0);
     VkResult res = vk->vkAllocateMemory(targetDevice, &allocInfo, nullptr, out);
 #ifdef __ANDROID__
-    if (importedAhb) AHardwareBuffer_release(importedAhb);
+    // AHB-RETAIN: keep the AHB reference for the alias allocation's lifetime. Releasing
+    // it here leaves the ColorBuffer's own reference as the only one; guest alias images
+    // live on a different VkDevice and can outlive ColorBuffer teardown, letting the GPU
+    // write into freed gralloc memory (system-wide SIGSEGV). The reference is kept until
+    // process exit: leaking a few image-sized buffers is safer than a use-after-free.
+    if (res != VK_SUCCESS && importedAhb) AHardwareBuffer_release(importedAhb);
 #endif
 #ifndef _WIN32
     if (res != VK_SUCCESS && importedFd >= 0) close(importedFd);
@@ -332,6 +337,37 @@ edit(
                       res == VK_SUCCESS ? (void*)*out : nullptr);
 
     if (res != VK_SUCCESS) {''',
+)
+edit(
+    "host/vulkan/vk_common_operations.cpp",
+    '''                if (propsRes != VK_SUCCESS) {
+                    GFXSTREAM_WARNING(
+                        "vkGetAndroidHardwareBufferPropertiesANDROID failed: %s. "
+                        "Falling back to non-exportable allocation.",
+                        string_VkResult(propsRes));
+                    AHardwareBuffer_release(ahb);
+                    break;
+                }''',
+    '''                if (propsRes != VK_SUCCESS) {
+                    GFXSTREAM_WARNING(
+                        "vkGetAndroidHardwareBufferPropertiesANDROID failed: %s. "
+                        "Falling back to non-exportable allocation.",
+                        string_VkResult(propsRes));
+                    AHardwareBuffer_release(ahb);
+                    break;
+                }
+                // AHB-SIZE-MISMATCH guard: never bind an image to an AHB smaller than its
+                // memory requirements. Mali's layout writes then run past the gralloc
+                // allocation and can corrupt unrelated host processes.
+                if (cbInfoPtr->imageMemReqs.size != 0 &&
+                    ahbProps.allocationSize < cbInfoPtr->imageMemReqs.size) {
+                    GFXSTREAM_WARNING(
+                        "AHB-SIZE-MISMATCH: ahb=%llu image=%llu; refusing import",
+                        (unsigned long long)ahbProps.allocationSize,
+                        (unsigned long long)cbInfoPtr->imageMemReqs.size);
+                    AHardwareBuffer_release(ahb);
+                    break;
+                }''',
 )
 edit(
     "host/vulkan/vk_common_operations.cpp",

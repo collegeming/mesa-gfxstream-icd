@@ -4,10 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       host_pointer_mode:
-        description: "full=current host-pointer imports; no_hostptr=baseline without VK_EXT_external_memory_host"
+        description: "full=both host-pointer paths; systemblob_only=SystemBlob import only; no_hostptr=no VK_EXT_external_memory_host"
         type: choice
         options:
           - full
+          - systemblob_only
           - no_hostptr
         default: full
   push:
@@ -296,12 +297,16 @@ jobs:
           grep -q 'STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE' source/host/virtio_gpu_resource.cpp
           HP_MODE="${{ inputs.host_pointer_mode }}"
           HP_MODE="${HP_MODE:-full}"
-          if [ "$HP_MODE" = "full" ]; then
+          echo "HOSTPTR-MODE: $HP_MODE" | tee out/hostptr-mode.txt
+          if [ "$HP_MODE" = "full" ] || [ "$HP_MODE" = "systemblob_only" ]; then
             python3 -I ci/scripts/patch_systemblob_host_pointer_type.py source
             grep -q 'SYSBLOB-HOSTPTR' source/host/vulkan/vk_decoder_global_state.cpp
+          fi
+          if [ "$HP_MODE" = "full" ]; then
             python3 -I ci/scripts/patch_buffer_host_pointer.py source
             grep -q 'BUF-HOSTPTR' source/host/vulkan/vk_common_operations.cpp
-          else
+          fi
+          if [ "$HP_MODE" = "no_hostptr" ]; then
             echo "HOSTPTR-BASELINE: skipping VK_EXT_external_memory_host patches" | tee out/hostptr-baseline.txt
           fi
           python3 -I ci/scripts/patch_cib_color_dump.py source
@@ -312,7 +317,13 @@ jobs:
           grep -q 'GFXSTREAM_DUMP_IMPORT_FD' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_host_alloc_dump.py source
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
-          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_systemblob_host_pointer_type.py ci/scripts/patch_buffer_host_pointer.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py out/
+          cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py out/
+          if [ "$HP_MODE" = "systemblob_only" ]; then
+            cp ci/scripts/patch_systemblob_host_pointer_type.py out/
+          fi
+          if [ "$HP_MODE" = "full" ]; then
+            cp ci/scripts/patch_systemblob_host_pointer_type.py ci/scripts/patch_buffer_host_pointer.py out/
+          fi
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
