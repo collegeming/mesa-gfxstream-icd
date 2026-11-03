@@ -40,6 +40,7 @@ on:
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
       - 'scripts/*cib_buffer_dmabuf_export*'
+      - 'scripts/*buffer_alias_failopen*'
       - 'scripts/*image_view_diag*'
       - 'scripts/*completion_fence_liveness*'
       - 'scripts/*systemblob*'
@@ -296,6 +297,8 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
           python3 -I ci/scripts/patch_cib_buffer_dmabuf_export.py source
           python3 -I ci/scripts/test_cib_buffer_dmabuf_export.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/cib-buffer-dmabuf-export-tests.txt
+          python3 -I ci/scripts/patch_buffer_alias_failopen.py source
+          python3 -I ci/scripts/test_buffer_alias_failopen.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/buffer-alias-failopen-tests.txt
           python3 -I ci/scripts/patch_image_view_diag.py source
           python3 -I ci/scripts/test_image_view_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/image-view-diag-tests.txt
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
@@ -352,6 +355,7 @@ jobs:
           cp ci/scripts/*niri_cib_buffer_trace* out/
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
           cp ci/scripts/*cib_buffer_dmabuf_export* out/
+          cp ci/scripts/*buffer_alias_failopen* out/
           cp ci/scripts/*image_view_diag* out/
           cp ci/scripts/*completion_fence_liveness* out/
 
