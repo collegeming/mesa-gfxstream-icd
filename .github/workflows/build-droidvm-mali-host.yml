@@ -12,11 +12,13 @@ on:
           - no_hostptr
         default: full
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag, diagnostic/ahb-first-hostvisible]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
       - 'scripts/patch_droidvm_mali_host.py'
+      - 'scripts/patch_ahb_first_hostvisible.py'
+      - 'scripts/test_ahb_first_hostvisible.py'
       - 'scripts/dmabuf_import_guard.h'
       - 'scripts/test_dmabuf_import_guard.cpp'
       - 'scripts/staging_contract.h'
@@ -40,6 +42,10 @@ on:
       - 'scripts/*niri_cib_buffer_trace*'
       - 'scripts/*niri_cib_ahb_buffer_fix*'
       - 'scripts/*cib_buffer_dmabuf_export*'
+      - 'scripts/*buffer_alias_failopen*'
+      - 'scripts/*image_view_diag*'
+      - 'scripts/*completion_fence_liveness*'
+      - 'scripts/*ahb_null_guard*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -96,6 +102,8 @@ jobs:
           git -C vulkan-headers archive HEAD | tar -x -C source/third_party/vulkan_headers
           python3 -I ci/scripts/patch_droidvm_build.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_droidvm_mali_host.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/patch_ahb_first_hostvisible.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_ahb_first_hostvisible.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/out-ahb-first"
           python3 -I ci/scripts/patch_native_backing_lease.py "$GITHUB_WORKSPACE/source"
           mkdir "$RUNNER_TEMP/native-roundtrip-before"
           cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-roundtrip-before/"
@@ -119,6 +127,8 @@ jobs:
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           git -C source diff --stat -- . ':!third_party/vulkan_headers'
           cp ci/scripts/patch_droidvm_build.py ci/scripts/patch_droidvm_mali_host.py out/
+          cp ci/scripts/patch_ahb_first_hostvisible.py ci/scripts/test_ahb_first_hostvisible.py out/
+          mkdir -p out/ahb-first && cp -r "$GITHUB_WORKSPACE/out-ahb-first"/* out/ahb-first/ 2>/dev/null || true
           cp ci/.github/workflows/build-droidvm-mali-host.yml out/
           cp ci/scripts/dmabuf_import_guard.h ci/scripts/test_dmabuf_import_guard.cpp out/
           cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
@@ -294,6 +304,10 @@ jobs:
           python3 -I ci/scripts/test_niri_cib_ahb_buffer_fix.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/niri-cib-ahb-buffer-fix-tests.txt
           python3 -I ci/scripts/patch_cib_buffer_dmabuf_export.py source
           python3 -I ci/scripts/test_cib_buffer_dmabuf_export.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/cib-buffer-dmabuf-export-tests.txt
+          python3 -I ci/scripts/patch_buffer_alias_failopen.py source
+          python3 -I ci/scripts/test_buffer_alias_failopen.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/buffer-alias-failopen-tests.txt
+          python3 -I ci/scripts/patch_image_view_diag.py source
+          python3 -I ci/scripts/test_image_view_diag.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/image-view-diag-tests.txt
           python3 -I ci/scripts/patch_unhide_drm_format_modifier.py source
           grep -q '__droidvm_never_hidden_extension' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_allow_guest_import_coherent.py source
@@ -329,6 +343,10 @@ jobs:
           grep -q 'GFXSTREAM_DUMP_IMPORT_FD' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_host_alloc_dump.py source
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
+          python3 -I ci/scripts/patch_completion_fence_liveness.py source
+          python3 -I ci/scripts/test_completion_fence_liveness.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/completion-fence-liveness-tests.txt
+          python3 -I ci/scripts/patch_ahb_null_guard.py source
+          python3 -I ci/scripts/test_ahb_null_guard.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-null-guard-tests.txt
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
@@ -346,6 +364,10 @@ jobs:
           cp ci/scripts/*niri_cib_buffer_trace* out/
           cp ci/scripts/*niri_cib_ahb_buffer_fix* out/
           cp ci/scripts/*cib_buffer_dmabuf_export* out/
+          cp ci/scripts/*buffer_alias_failopen* out/
+          cp ci/scripts/*image_view_diag* out/
+          cp ci/scripts/*completion_fence_liveness* out/
+          cp ci/scripts/*ahb_null_guard* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
@@ -449,7 +471,8 @@ jobs:
                   "Bounded virtio resource create/ColorBuffer/attach diagnostics distinguish late create, host CB create failure and resource-id mismatch; logging only",
                   "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change",
                   "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains",
-                  "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior"
+                  "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
+                  "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",

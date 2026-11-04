@@ -99,6 +99,7 @@ edit(ops, '''            if (!colorBufferInfo) {
                 // The guest's VkImportBufferGOOGLE duplicates this memory's handle. AHB
                 // cannot produce one for a buffer on this driver, but a dma-buf can, and
                 // the device probe proved the guest-visible import at the same shape.
+                int exportFd = -1;
                 if (mDeviceInfo.supportsDmaBuf) {
                     VkMemoryGetFdInfoKHR getFdInfo = {
                         VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
@@ -106,7 +107,6 @@ edit(ops, '''            if (!colorBufferInfo) {
                         info->memory,
                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                     };
-                    int exportFd = -1;
                     exportRes = vk->vkGetMemoryFdKHR(mDevice, &getFdInfo, &exportFd);
                     validHandle = (VK_SUCCESS == exportRes) && (-1 != exportFd);
                     if (validHandle) {
@@ -123,7 +123,7 @@ edit(ops, '''            if (!colorBufferInfo) {
                                        "result=%d handle=%d color-buffer=0",
                                        (unsigned long long)info->size,
                                        (unsigned long long)(uintptr_t)info->memory,
-                                       (int)exportRes, validHandle ? (int)exportFd : -1);
+                                       (int)exportRes, validHandle ? exportFd : -1);
                     }
                 }
                 return true;

@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Assert the AHB-first host-visible invariants on a patched gfxstream tree.
+
+Run after patch_ahb_first_hostvisible.py (CI runs it on the patched source before the build).
+
+Checks:
+  1. MemoryInfo carries ahbBacking/ahbBackingBytes next to the host-pointer fields, and the store
+     sits where every teardown path can see it (with the host-pointer fields, not at the end);
+  2. the AHB-first block is gated on AndroidAHB + ExternalBlob, allocates the AHB before the
+     memfd exists, imports it, and records the handle;
+  3. the memfd creation, the host-pointer import append and the SHARED_MEMORY publication are all
+     guarded by `if (!ahbBacking)`, so an AHB allocation can never also carry a host pointer;
+  4. exportMemoryHandle returns the stored handle before asking the driver, refuses a
+     host-pointer import with AHB-HOSTPTR-CONFLICT, and does not take mMutex again;
+  5. the AHB is released exactly once, after vkFreeMemory, and the field is cleared;
+  6. the allocation failure path releases the AHB exactly once and falls back with a warning;
+  7. unrelated guarantees are untouched: the zero-size guard, the host-pointer contract helper,
+     the GpuPool branch, and the ColorBuffer AHB import.
+"""
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+out = pathlib.Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
+
+structs = (root / "host/vulkan/vk_decoder_internal_structs.h").read_text(
+    encoding="utf-8", errors="replace").replace("\r\n", "\n")
+state = (root / "host/vulkan/vk_decoder_global_state.cpp").read_text(
+    encoding="utf-8", errors="replace").replace("\r\n", "\n")
+
+# 1. MemoryInfo fields + early store.
+assert "void* ahbBacking = nullptr;" in structs
+assert "VkDeviceSize ahbBackingBytes = 0;" in structs
+assert structs.index("void* importedHostPointer = nullptr;") < structs.index(
+    "void* ahbBacking = nullptr;")
+store = "        memoryInfo.ahbBacking = ahbBacking;"
+assert state.count(store) == 1, "exactly one store site"
+assert state.index("memoryInfo.importedHostPointer = actualHostImport->pHostPointer;") < \
+    state.index(store), "store belongs with the host-pointer fields (early, teardown-visible)"
+assert state.index(store) < state.index("memoryInfo.sharedMemory = std::exchange"), \
+    "store must precede the late memfd publication bookkeeping"
+
+# 2. The AHB-first block.
+assert state.count("static AHardwareBuffer* allocateAhbFirstMemory(VkDeviceSize size)") == 1
+helper = state[state.index("static AHardwareBuffer* allocateAhbFirstMemory("):]
+helper = helper[:helper.index("#endif")]
+assert "AHardwareBuffer_allocate(&desc, &ahb)" in helper
+assert "AHARDWAREBUFFER_FORMAT_BLOB" in helper
+assert "AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER" in helper
+assert "AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN" in helper
+gate = state.index("m_vkEmulation->getExternalMemoryMode() ==\n                        "
+                   "ExternalMemory::Mode::AndroidAHB")
+tail = state.index("auto memory = SharedMemory(\"shared-memory-vk-\"")
+call = state.index("ahb = allocateAhbFirstMemory(localAllocInfo.allocationSize);")
+assert gate < call < tail, "AHB allocation must run before the memfd is created"
+assert call < state.index("importInfo.buffer = ahb;", call) < tail
+
+# --- regression guard: the AHB byte count must be assigned on EVERY path of the type decision ---
+# Shipped once with `ahbBytes` set only in the "host index already in memoryTypeBits" branch, so
+# the remap path fell through `if (ahb && ahbBytes)` with ahbBytes == 0, released the AHB and took
+# the memfd fallback on device (AHB-FIRST-FALLBACK for 4096 B). The assignment must sit at the
+# same nesting level as the property-query branches, not inside the if/else chain below them.
+lines = state.splitlines()
+def indent_of(predicate, what):
+    for line in lines:
+        if predicate(line):
+            return len(line) - len(line.lstrip())
+    raise AssertionError(f'missing line: {what}')
+
+query_indent = indent_of(lambda l: 'if (ahbRes != VK_SUCCESS) {' in l, 'properties-query branch')
+bytes_indent = indent_of(lambda l: 'ahbBytes = ahbProps.allocationSize' in l, 'ahbBytes assignment')
+assert bytes_indent == query_indent, (
+    'ahbBytes must be assigned once, outside the type decision (indent '
+    f'{bytes_indent} vs {query_indent}); inside it, the remap path leaves it zero and every '
+    'allocation falls back to the memfd')
+remap = state.index('localAllocInfo.memoryTypeIndex = ahbType;', call)
+bytes_assign = state.index('ahbBytes = ahbProps.allocationSize', call)
+assert remap < bytes_assign, 'both the remap and the direct branch must reach the byte count'
+# The other AHB fields are set exactly once, inside the single success path.
+assert state.count('ahbBacking = ahb;') == 1
+assert state.count('ahbBackingBytes = ahbBytes;') == 1
+assert state.index('if (ahb && ahbBytes) {', call) < state.index('ahbBacking = ahb;', call)
+assert state.index('if (ahb && ahbBytes) {', call) < state.index('importInfo.buffer = ahb;', call)
+import_append = state.index("importInfo.buffer = ahb;", call)
+block = state[state.index("AHB-first: the VMM may only map a handle"):import_append]
+# Kill switch: one env var restores the memfd path without a rebuild.
+assert "GFXSTREAM_AHB_FIRST" in block
+assert "value.size() == 1 && value[0] == '0'" in block
+assert "const std::string value =" in block, "getEnvironmentVariable returns std::string"
+# The host index is never re-mapped (a coherent promise the guest already holds); an AHB whose
+# types exclude it is refused and the memfd path runs. The pre-existing integration test asserts
+# the same, so this patch must not reintroduce `memoryTypeIndex = i`.
+# v3: the host index is remapped onto a type the AHB can be imported as, and the remap is
+# logged with the old index, the new index and that type's flags. The guest's own type index is
+# not touched, so its bind stays legal and its visible memory properties are unchanged.
+assert "AHB-FIRST-TYPE-REMAP" in block
+assert "localAllocInfo.memoryTypeIndex = ahbType;" in block
+assert "const uint32_t requestedType = localAllocInfo.memoryTypeIndex;" in block
+assert "(guest type index unchanged)" in block
+# Only the host index inside this allocation is rewritten -- never the guest-visible table.
+assert "mGuestToHostMemoryTypeIndexMap" not in block
+assert "propertyFlags =" not in block
+# Scoped to this patch's block: the pre-existing SystemBlob host-pointer patch legitimately
+# re-selects a type for the memfd import; what must not happen is *this* patch doing it.
+assert "localAllocInfo.memoryTypeIndex = i;" not in block
+# No dedicated struct is appended here: the guest cannot name the buffer before bind, so an
+# empty VkMemoryDedicatedAllocateInfo would be a no-op (and a diff with no effect).
+assert "localDedicatedAllocInfo" not in block
+assert "vk_append_struct(&structChainIter, &importInfo);" in state
+assert "ahbBacking = ahb;" in state
+assert "ahbBackingBytes = ahbBytes;" in state
+assert "m_vkEmulation->getFeatures().ExternalBlob.enabled()" in state[gate:tail], \
+    "AHB-first only when the blob reaches the VMM by handle"
+
+# 3. No second backing next to the AHB.
+# The whole fresh-memfd block is wrapped, not rewritten: every upstream line inside it (the
+# host-pointer append that patch_systemblob_host_pointer_type.py anchors on, the
+# memory.create(0600) call the integration test counts) stays byte-identical.
+wrap_open = state.index("if (!ahbBacking) {")
+wrap_close = state.index("}  // if (!ahbBacking)")
+memfd_create = state.index("int ret = memory.create(0600);")
+hostptr_append = state.index("importHostInfo.pHostPointer = mappedPtr;")
+shared_pub = state.index("sharedMemory = std::make_optional<SharedMemory>")
+pool_close = state.index("}  // if (poolOffset < 0)")
+assert wrap_open < memfd_create < hostptr_append < shared_pub < wrap_close < pool_close,     "the wrapper must enclose memfd create, host-pointer import and publication"
+# The wrapped region's indentation is intentionally unchanged (C++ ignores it); only the two
+# inserted lines and the closing marker are new.
+assert state[wrap_open:memfd_create].count("if (!ahbBacking) {") == 1
+
+# 4. Export: stored handle first, conflict guard second, driver last; no relock.
+export_fn = state[state.index("std::optional<BlobDescriptorType> exportMemoryHandle("):]
+export_fn = export_fn[:export_fn.index("void getSupportedSemaphoreHandleTypes(")]
+ahb_case = export_fn[export_fn.index("case ExternalMemory::Mode::AndroidAHB: {"):]
+assert "auto* storedInfo = gfxstream::base::find(mMemoryInfo, memory);" in ahb_case
+assert "if (storedInfo && storedInfo->ahbBacking) {" in ahb_case
+# v5: the guest cannot receive the AHB pointer -- the VMM has no AHB branch and reads it as an
+# fd, so the mapping fails. Export the AHB's own dma-buf fd instead: same pages, no copy, and a
+# descriptor type the VMM already maps.
+assert "AHardwareBuffer_getNativeHandle(ahb)" in ahb_case
+assert "native->data[0]" in ahb_case
+assert "dup(ahbFd)" in ahb_case
+assert "ret.streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF;" in ahb_case
+# Scoped to the AHB-first branch: Class 1's ColorBuffer path legitimately still uses
+# PLATFORM_AHB elsewhere in this function and in the file.
+ahb_first_branch = ahb_case[:ahb_case.index("if (storedInfo && storedInfo->importedHostPointer)")]
+assert "STREAM_HANDLE_TYPE_PLATFORM_AHB" not in ahb_first_branch,     "an AHB pointer is not an fd; the VMM would read it as one and the guest mapping would fail"
+assert "return std::nullopt;" in ahb_case[ahb_case.index("exposes no native dmabuf fd"):]
+assert "AHB-HOSTPTR-CONFLICT" in ahb_case
+# Runtime identity: the export logs imported vs exported and whether they are the same object.
+assert "AHB-FIRST-EXPORT" in ahb_case
+assert 'ahbFd >= 0 ? "same" : "MISMATCH"' in ahb_case
+assert "AHB-FIRST: size=%llu host-type=%u ahb=%p" in state
+assert "return std::nullopt;" in ahb_case[ahb_case.index("AHB-HOSTPTR-CONFLICT"):]
+stored_ret = ahb_case.index("ret.handle = static_cast<ExternalHandleType>(exportFd);")
+conflict = ahb_case.index("AHB-HOSTPTR-CONFLICT")
+driver = ahb_case.index("vk->vkGetMemoryAndroidHardwareBufferANDROID(device, &getAhbInfo")
+assert stored_ret < conflict < driver, "stored handle, then refusal, then the driver"
+assert "lock_guard" not in ahb_case, "vkGetBlobInternal already holds mMutex; a second lock deadlocks"
+
+# 5/6. Release exactly once, after vkFreeMemory, field cleared; failure path releases once.
+assert state.count("AHardwareBuffer_release(reinterpret_cast<AHardwareBuffer*>(memoryInfo.ahbBacking));") == 1
+release = state.index("AHardwareBuffer_release(reinterpret_cast<AHardwareBuffer*>(memoryInfo.ahbBacking));")
+free_mem = state.index("deviceDispatch->vkFreeMemory(device, memory, nullptr);\n\n#ifdef __ANDROID__")
+assert free_mem < release, "the driver must drop its import before the AHB reference goes"
+assert "memoryInfo.ahbBacking = nullptr;" in state[release:release + 400]
+assert "memoryInfo.ahbBackingBytes = 0;" in state[release:release + 400]
+assert state.count("if (ahb) AHardwareBuffer_release(ahb);") == 1
+assert "AHB-FIRST-FALLBACK" in state
+# The log call, not the first textual mention: a comment above the release names the tag too.
+fallback = state.index('"AHB-FIRST-FALLBACK:')
+assert state.index("if (ahb) AHardwareBuffer_release(ahb);") < fallback
+
+# 7. Untouched guarantees.
+assert "rejectZeroSizeAllocation(localAllocInfo" in state, "zero-size guard must stay"
+assert "validateHostPointerImport(" in state, "host-pointer contract helper must stay"
+assert "info->poolOffset >= 0" in state and "STREAM_HANDLE_TYPE_MEM_POOL" in state
+assert state.count("if (poolOffset < 0) {") == 1, "GpuPool branch keeps its shape"
+assert "AHardwareBuffer_allocate(&desc, &ahb);\n    if (ahbRes != 0 || !ahb) {" in \
+    (root / "host/vulkan/vk_common_operations.cpp").read_text(
+        encoding="utf-8", errors="replace").replace("\r\n", "\n"), \
+    "ColorBuffer AHB import must stay"
+
+report = (
+    "PASS MemoryInfo carries ahbBacking, stored with the host-pointer fields\n"
+    "PASS AHB-first block gated on AndroidAHB+ExternalBlob, allocates before the memfd\n"
+    "PASS memfd create, host-pointer append and SHARED_MEMORY publication all guarded\n"
+    "PASS export returns the stored handle, refuses host-pointer imports, no relock\n"
+    "PASS AHB released once after vkFreeMemory and cleared; failure path releases once\n"
+    "PASS zero-size guard, host-pointer contract, GpuPool and ColorBuffer AHB paths intact\n"
+    "PASS AHB type remap: host index moved to the AHB type, logged with flags, guest table untouched\n"
+    "PASS ahbBytes set on every path of the type decision (the remap cannot fall back)\n"
+    "PASS runtime identity logged: AHB-FIRST-EXPORT imported/exported/MISMATCH\n"
+)
+print(report, end="")
+if out:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "ahb-first-tests.txt").write_text(report)
