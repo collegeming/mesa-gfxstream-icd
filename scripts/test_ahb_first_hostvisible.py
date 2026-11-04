@@ -99,6 +99,10 @@ assert "auto* storedInfo = gfxstream::base::find(mMemoryInfo, memory);" in ahb_c
 assert "if (storedInfo && storedInfo->ahbBacking) {" in ahb_case
 assert "ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);" in ahb_case
 assert "AHB-HOSTPTR-CONFLICT" in ahb_case
+# Runtime identity: the export logs imported vs exported and whether they are the same object.
+assert "AHB-FIRST-EXPORT" in ahb_case
+assert 'storedInfo->ahbBacking == (void*)ret.handle ? "same" : "MISMATCH"' in ahb_case
+assert "AHB-FIRST: size=%llu host-type=%u ahb=%p" in state
 assert "return std::nullopt;" in ahb_case[ahb_case.index("AHB-HOSTPTR-CONFLICT"):]
 stored_ret = ahb_case.index("ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);")
 conflict = ahb_case.index("AHB-HOSTPTR-CONFLICT")
