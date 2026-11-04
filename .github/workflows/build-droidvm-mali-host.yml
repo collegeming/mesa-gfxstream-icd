@@ -20,6 +20,8 @@ on:
       - 'scripts/patch_ahb_first_hostvisible.py'
       - 'scripts/test_ahb_first_hostvisible.py'
       - 'scripts/*render_staging_coherent*'
+      - 'scripts/*render_readback_quiesce*'
+      - 'scripts/*render_colorbuffer_linear*'
       - 'scripts/dmabuf_import_guard.h'
       - 'scripts/test_dmabuf_import_guard.cpp'
       - 'scripts/staging_contract.h'
@@ -151,6 +153,18 @@ jobs:
           set -euo pipefail
           python3 -I ci/scripts/patch_render_staging_coherent.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/test_render_staging_coherent.py "$GITHUB_WORKSPACE/source" ci/.github/workflows/build-droidvm-mali-host.yml | tee out/staging-coherent-tests.txt
+          git -C source diff --check
+
+      - name: Apply and test P1 LINEAR ColorBuffer diagnostic (no GPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I ci/scripts/patch_render_colorbuffer_linear.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_patch_render_scripts.py 2>&1 | tee out/colorbuffer-linear-tests.txt
+          grep -q 'GFXSTREAM_COLORBUFFER_LINEAR' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-MEMTYPE-DISJOINT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXSTREAM_AHB_STRICT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'test_colorbuffer_linear .*ok' out/colorbuffer-linear-tests.txt
           git -C source diff --check
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
@@ -378,6 +392,8 @@ jobs:
           cp ci/scripts/*completion_fence_liveness* out/
           cp ci/scripts/*ahb_null_guard* out/
           cp ci/scripts/*render_staging_coherent* out/
+          cp ci/scripts/*render_colorbuffer_linear* out/
+          cp ci/scripts/test_patch_render_scripts.py out/
 
       - name: Fetch Android NDK r27c
         shell: bash
