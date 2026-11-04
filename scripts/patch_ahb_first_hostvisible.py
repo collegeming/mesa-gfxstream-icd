@@ -173,30 +173,19 @@ edit(
                                 (int)ahbRes, (unsigned long long)localAllocInfo.allocationSize);
                         } else if (ahbProps.memoryTypeBits == 0) {
                             GFXSTREAM_ERROR("AHB-FIRST: AHB reports no memory types");
+                        } else if (localAllocInfo.memoryTypeIndex >= 32 ||
+                                   (ahbProps.memoryTypeBits &
+                                    (uint32_t{1} << localAllocInfo.memoryTypeIndex)) == 0) {
+                            // The host index is the guest's own type mapped through the
+                            // memory-properties table. Re-mapping it would change the
+                            // coherent promise the guest was already given, and the existing
+                            // host-memory contract test forbids it. Refuse the AHB here and
+                            // let the memfd path run instead.
+                            GFXSTREAM_ERROR(
+                                "AHB-FIRST-TYPE-REJECT: AHB memory types 0x%x exclude "
+                                "host index %u; keeping the memfd path",
+                                ahbProps.memoryTypeBits, localAllocInfo.memoryTypeIndex);
                         } else {
-                            // The driver need not accept the host index chosen for the guest's
-                            // type. Move the *host* index onto a type the AHB supports -- the
-                            // guest ABI (type 8, flags 0x7) is unchanged, exactly as the
-                            // SystemBlob host-pointer path already does when its import is
-                            // rejected.
-                            if (localAllocInfo.memoryTypeIndex >= 32 ||
-                                (ahbProps.memoryTypeBits &
-                                 (uint32_t{1} << localAllocInfo.memoryTypeIndex)) == 0) {
-                                const uint32_t requestedType = localAllocInfo.memoryTypeIndex;
-                                for (uint32_t i = 0; i <= 31; ++i) {
-                                    if (ahbProps.memoryTypeBits & (uint32_t{1} << i)) {
-                                        localAllocInfo.memoryTypeIndex = i;
-                                        break;
-                                    }
-                                }
-                                static std::atomic<unsigned> sAhbFirstTypeSwitches{0};
-                                if (sAhbFirstTypeSwitches.fetch_add(1) < 8) {
-                                    GFXSTREAM_WARNING(
-                                        "AHB-FIRST-TYPE-SWITCH: %u -> %u bits=0x%x",
-                                        requestedType, localAllocInfo.memoryTypeIndex,
-                                        ahbProps.memoryTypeBits);
-                                }
-                            }
                             ahbBytes = ahbProps.allocationSize
                                            ? ahbProps.allocationSize
                                            : localAllocInfo.allocationSize;
