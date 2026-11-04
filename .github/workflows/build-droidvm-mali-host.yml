@@ -100,8 +100,6 @@ jobs:
           git -C vulkan-headers archive HEAD | tar -x -C source/third_party/vulkan_headers
           python3 -I ci/scripts/patch_droidvm_build.py "$GITHUB_WORKSPACE/source"
           python3 -I ci/scripts/patch_droidvm_mali_host.py "$GITHUB_WORKSPACE/source"
-          python3 -I ci/scripts/patch_ahb_first_hostvisible.py "$GITHUB_WORKSPACE/source"
-          python3 -I ci/scripts/test_ahb_first_hostvisible.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/out-ahb-first"
           python3 -I ci/scripts/patch_native_backing_lease.py "$GITHUB_WORKSPACE/source"
           mkdir "$RUNNER_TEMP/native-roundtrip-before"
           cp source/host/vulkan/vk_decoder_global_state.cpp source/host/vulkan/vk_decoder.cpp source/host/vulkan/vk_sub_decoder.cpp "$RUNNER_TEMP/native-roundtrip-before/"
@@ -341,6 +339,10 @@ jobs:
           grep -q 'GFXSTREAM_DUMP_HOST_ALLOC' source/host/vulkan/vk_decoder_global_state.cpp
           python3 -I ci/scripts/patch_completion_fence_liveness.py source
           python3 -I ci/scripts/test_completion_fence_liveness.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/completion-fence-liveness-tests.txt
+          # Applied last: it wraps the SystemBlob memfd block, and several earlier patches
+          # (notably patch_systemblob_host_pointer_type.py) anchor on lines inside it.
+          python3 -I ci/scripts/patch_ahb_first_hostvisible.py source
+          python3 -I ci/scripts/test_ahb_first_hostvisible.py source "$GITHUB_WORKSPACE/out-ahb-first"
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/

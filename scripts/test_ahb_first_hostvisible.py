@@ -64,7 +64,9 @@ assert "const std::string value =" in block, "getEnvironmentVariable returns std
 # types exclude it is refused and the memfd path runs. The pre-existing integration test asserts
 # the same, so this patch must not reintroduce `memoryTypeIndex = i`.
 assert "AHB-FIRST-TYPE-REJECT" in block
-assert "localAllocInfo.memoryTypeIndex = i;" not in state
+# Scoped to this patch's block: the pre-existing SystemBlob host-pointer patch legitimately
+# re-selects a type for the memfd import; what must not happen is *this* patch doing it.
+assert "localAllocInfo.memoryTypeIndex = i;" not in block
 # No dedicated struct is appended here: the guest cannot name the buffer before bind, so an
 # empty VkMemoryDedicatedAllocateInfo would be a no-op (and a diff with no effect).
 assert "localDedicatedAllocInfo" not in block
@@ -75,17 +77,19 @@ assert "m_vkEmulation->getFeatures().ExternalBlob.enabled()" in state[gate:tail]
     "AHB-first only when the blob reaches the VMM by handle"
 
 # 3. No second backing next to the AHB.
-memfd_block = state[state.index("} else if (m_vkEmulation->getFeatures().SystemBlob.enabled()) {"):]
-memfd_block = memfd_block[:memfd_block.index("}  // if (poolOffset < 0)")]
-assert "if (!ahbBacking) {" in memfd_block
-assert memfd_block.index("if (!ahbBacking) {") < memfd_block.index("int ret = memory.create(0600);")
-assert memfd_block.index("int ret = memory.create(0600);") < memfd_block.index(
-    "importHostInfo.pHostPointer = mappedPtr;")
-shared_pub = state[state.index("                // Same reason: an uncreated memfd"):
-                   state.index("}  // if (poolOffset < 0)")]
-assert "if (!ahbBacking) {" in shared_pub
-assert shared_pub.index("if (!ahbBacking) {") < shared_pub.index(
-    "sharedMemory = std::make_optional<SharedMemory>")
+# The whole fresh-memfd block is wrapped, not rewritten: every upstream line inside it (the
+# host-pointer append that patch_systemblob_host_pointer_type.py anchors on, the
+# memory.create(0600) call the integration test counts) stays byte-identical.
+wrap_open = state.index("if (!ahbBacking) {")
+wrap_close = state.index("}  // if (!ahbBacking)")
+memfd_create = state.index("int ret = memory.create(0600);")
+hostptr_append = state.index("importHostInfo.pHostPointer = mappedPtr;")
+shared_pub = state.index("sharedMemory = std::make_optional<SharedMemory>")
+pool_close = state.index("}  // if (poolOffset < 0)")
+assert wrap_open < memfd_create < hostptr_append < shared_pub < wrap_close < pool_close,     "the wrapper must enclose memfd create, host-pointer import and publication"
+# The wrapped region's indentation is intentionally unchanged (C++ ignores it); only the two
+# inserted lines and the closing marker are new.
+assert state[wrap_open:memfd_create].count("if (!ahbBacking) {") == 1
 
 # 4. Export: stored handle first, conflict guard second, driver last; no relock.
 export_fn = state[state.index("std::optional<BlobDescriptorType> exportMemoryHandle("):]
