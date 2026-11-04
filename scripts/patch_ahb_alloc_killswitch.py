@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime kill switch for every host-side AHardwareBuffer_allocate call.
+"""Runtime A/B switch for the explicit ColorBuffer AHardwareBuffer_allocate path.
 
 Why
 ---
@@ -13,34 +13,41 @@ build-time change would also change everything else in the .so.
 
 What
 ----
-GFXSTREAM_DISABLE_AHB_ALLOC, when present in the environment (any value),
-makes every AHardwareBuffer_allocate() entry point log and return nullptr
-before the call:
+GFXSTREAM_DISABLE_AHB_ALLOC, when present in the environment (any value), makes
+the explicit ColorBuffer allocation log and return nullptr before
+AHardwareBuffer_allocate():
 
-1. allocAhb() in host/vulkan/vk_common_operations.cpp (ColorBuffer images);
-2. allocateAhbFirstMemory() in host/vulkan/vk_decoder_global_state.cpp, the
-   host-visible AHB-first memory added by patch_ahb_first_hostvisible.py.
+    allocAhb() in host/vulkan/vk_common_operations.cpp.
 
-Both callers already handle nullptr. allocExternalMemory() logs
-"Falling back to non-exportable allocation" and breaks to the ordinary
-allocation path; the AHB-first branch releases nothing, logs
-AHB-FIRST-FALLBACK and keeps the private-memfd path. Unset keeps today's
-behavior, so the same .so can be A/B'd on the device.
+The caller already handles nullptr: allocExternalMemory() logs "Falling back to
+non-exportable allocation" and breaks to the ordinary allocation path.
 
-Log line, once per call:
+The switch is installed in exactly one place, and only on the explicit
+allocation path. allocateAhbFirstMemory() in vk_decoder_global_state.cpp (the
+startup/first-allocation path added by patch_ahb_first_hostvisible.py) is left
+byte-identical: it is not an explicit AHardwareBuffer_allocate request and
+toggling it would change startup behavior instead of testing one call site.
+
+The lookup is lazy. It is a function-local
+
+    static const bool disableAhbAlloc = getenv("GFXSTREAM_DISABLE_AHB_ALLOC") != nullptr;
+
+so it is evaluated on the first allocation call, never during library load (no
+static initializer calls getenv), and the environment is read once per process.
+With the variable unset the only difference against the pinned source is that
+one predicted-not-taken branch; the allocation code, its error handling and the
+fallback are byte-identical. With it set the call is skipped, the log line below
+is emitted once per allocation, and nullptr drives the existing fallback:
 
     GFXSTREAM_AHB_ALLOC_DISABLED: shape=%ux%u format=%u usage=0x%llx
 
 For allocAhb() the fields are the VkImage extent, VkFormat and VkImageUsageFlags.
-For allocateAhbFirstMemory() they are the AHardwareBuffer_Desc it would have
-used: width=size, height=1, AHARDWAREBUFFER_FORMAT_BLOB, and the CPU/GPU usage
-bits.
 
-The script is idempotent: a second run recognizes the AHB-ALLOC-KILLSWITCH-n
-markers and verifies the guarded block is intact instead of patching again.
-Every replacement requires exactly one occurrence of the source text. All
-anchors are checked before any file is written, so a rejected patch leaves the
-tree untouched.
+The script is idempotent: a second run recognizes the BEGIN/END markers and
+verifies the guarded block is intact instead of patching again. Every
+replacement requires exactly one occurrence of the source text. All anchors are
+checked before any file is written, so a rejected patch leaves the tree
+untouched.
 """
 import argparse
 from pathlib import Path
@@ -52,86 +59,76 @@ root = parser.parse_args().root.resolve()
 ops = "host/vulkan/vk_common_operations.cpp"
 decoder = "host/vulkan/vk_decoder_global_state.cpp"
 
-originals = {rel: (root / rel).read_text(encoding="utf-8") for rel in (ops, decoder)}
-texts = dict(originals)
+ops_path = root / ops
+if not ops_path.is_file():
+    raise SystemExit(f"{ops}: file not found under {root}")
 
-# ---------------------------------------------------------------------------
-# getenv() is not declared by any header vk_common_operations.cpp includes.
-# ---------------------------------------------------------------------------
-if "#include <cstdlib>" in texts[ops]:
-    print("already patched", ops, "(cstdlib)")
-else:
-    anchor = "#include <algorithm>\n"
-    if texts[ops].count(anchor) != 1:
-        raise SystemExit(
-            f"{ops}: expected one <algorithm> include, found {texts[ops].count(anchor)}")
-    texts[ops] = texts[ops].replace(anchor, anchor + "#include <cstdlib>\n")
-    print("patched", ops, "(cstdlib)")
+before = ops_path.read_text(encoding="utf-8")
+text = before
 
-# ---------------------------------------------------------------------------
-# 1. ColorBuffer images: return before AHardwareBuffer_allocate is reached.
-# ---------------------------------------------------------------------------
-# 2. Host-visible AHB-first memory: same switch, same nullptr contract.
-# ---------------------------------------------------------------------------
-edits = [
-    (
-        ops,
-        """static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {
-""",
-        """static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {
-    // AHB-ALLOC-KILLSWITCH-1: runtime switch for the ColorBuffer AHB allocation. With
-    // GFXSTREAM_DISABLE_AHB_ALLOC present (any value) this returns before
-    // AHardwareBuffer_allocate(), so one .so can answer whether the RefBase::incStrong crash
-    // happens inside that call; unset keeps the shipped behavior. The caller breaks to its
-    // existing non-exportable allocation fallback on nullptr. Logged on every call.
-    if (getenv("GFXSTREAM_DISABLE_AHB_ALLOC") != nullptr) {
+INCLUDE = "#include <cstdlib>\n"
+BEGIN = "    // AHB-ALLOC-KILLSWITCH-1-BEGIN\n"
+END = "    // AHB-ALLOC-KILLSWITCH-1-END\n"
+GUARD = (
+    BEGIN
+    + """    // Runtime A/B switch for the explicit ColorBuffer AHardwareBuffer_allocate path only.
+    // A function-local static keeps the lookup lazy: it runs on the first allocation, never
+    // during library load, and the environment is read once per process. With
+    // GFXSTREAM_DISABLE_AHB_ALLOC unset the allocation below is unchanged; with it set (any
+    // value) the call is skipped and the caller takes its existing non-exportable fallback.
+    static const bool disableAhbAlloc = getenv("GFXSTREAM_DISABLE_AHB_ALLOC") != nullptr;
+    if (disableAhbAlloc) {
         GFXSTREAM_WARNING(
             "GFXSTREAM_AHB_ALLOC_DISABLED: shape=%ux%u format=%u usage=0x%llx",
             (unsigned)imageCreateInfo->extent.width, (unsigned)imageCreateInfo->extent.height,
             (unsigned)imageCreateInfo->format, (unsigned long long)imageCreateInfo->usage);
         return nullptr;
     }
-""",
-        "AHB-ALLOC-KILLSWITCH-1",
-    ),
-    (
-        decoder,
-        """    static AHardwareBuffer* allocateAhbFirstMemory(VkDeviceSize size) {
-        if (!size || size > 0x7fffffffull) return nullptr;
-""",
-        """    static AHardwareBuffer* allocateAhbFirstMemory(VkDeviceSize size) {
-        if (!size || size > 0x7fffffffull) return nullptr;
-        // AHB-ALLOC-KILLSWITCH-2: the same runtime switch for the host-visible AHB-first memory
-        // added by patch_ahb_first_hostvisible.py. A nullptr here keeps the existing
-        // private-memfd path, which logs AHB-FIRST-FALLBACK and continues without the AHB.
-        if (getenv("GFXSTREAM_DISABLE_AHB_ALLOC") != nullptr) {
-            GFXSTREAM_WARNING(
-                "GFXSTREAM_AHB_ALLOC_DISABLED: shape=%ux%u format=%u usage=0x%llx", (unsigned)size,
-                1u, (unsigned)AHARDWAREBUFFER_FORMAT_BLOB,
-                (unsigned long long)(AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
-                                     AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
-                                     AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER));
-            return nullptr;
-        }
-""",
-        "AHB-ALLOC-KILLSWITCH-2",
-    ),
-]
+"""
+    + END
+)
 
-for rel, old, new, marker in edits:
-    text = texts[rel]
-    if marker in text:
-        if text.count(new) != 1:
-            raise SystemExit(f"{rel}: {marker} present but the guarded block is not intact")
-        print("already patched", rel, f"({marker})")
-        continue
-    if text.count(old) != 1:
-        raise SystemExit(f"{rel}: expected one {marker} anchor, found {text.count(old)}")
-    texts[rel] = text.replace(old, new)
-    print("patched", rel, f"({marker})")
+# ---------------------------------------------------------------------------
+# getenv() is not declared by any header vk_common_operations.cpp includes.
+# ---------------------------------------------------------------------------
+if INCLUDE in text:
+    print("already patched", ops, "(cstdlib)")
+else:
+    anchor = "#include <algorithm>\n"
+    if text.count(anchor) != 1:
+        raise SystemExit(
+            f"{ops}: expected one <algorithm> include, found {text.count(anchor)}")
+    text = text.replace(anchor, anchor + INCLUDE)
+    print("patched", ops, "(cstdlib)")
 
-for rel, text in texts.items():
-    if text != originals[rel]:
-        (root / rel).write_text(text, encoding="utf-8")
+# ---------------------------------------------------------------------------
+# Exactly one kill switch, in allocAhb() only.
+# ---------------------------------------------------------------------------
+anchor = "static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {\n"
+if text.count(anchor) != 1:
+    raise SystemExit(f"{ops}: expected one allocAhb() anchor, found {text.count(anchor)}")
 
-print("AHB allocation runtime kill switch installed")
+if BEGIN in text:
+    if text.count(BEGIN) != 1 or text.count(END) != 1:
+        raise SystemExit(f"{ops}: kill switch markers are not paired")
+    if text.count(GUARD) != 1:
+        raise SystemExit(f"{ops}: kill switch marker present but the guarded block is not intact")
+    print("already patched", ops, "(AHB-ALLOC-KILLSWITCH-1)")
+else:
+    text = text.replace(anchor, anchor + GUARD)
+    print("patched", ops, "(AHB-ALLOC-KILLSWITCH-1)")
+
+# The AHB-first path is intentionally untouched. An old two-site tree would make the
+# A/B ambiguous, so refuse it instead of guessing.
+decoder_path = root / decoder
+if decoder_path.is_file():
+    decoder_text = decoder_path.read_text(encoding="utf-8")
+    if "AHB-ALLOC-KILLSWITCH-2" in decoder_text:
+        raise SystemExit(
+            f"{decoder}: old AHB-FIRST kill switch (AHB-ALLOC-KILLSWITCH-2) is still present; "
+            "start from a clean pinned tree so only the explicit allocAhb() path is switched")
+
+if text != before:
+    ops_path.write_text(text, encoding="utf-8")
+
+print("AHB allocation runtime kill switch installed (explicit allocAhb() path only)")
