@@ -54,6 +54,33 @@ tail = state.index("auto memory = SharedMemory(\"shared-memory-vk-\"")
 call = state.index("ahb = allocateAhbFirstMemory(localAllocInfo.allocationSize);")
 assert gate < call < tail, "AHB allocation must run before the memfd is created"
 assert call < state.index("importInfo.buffer = ahb;", call) < tail
+
+# --- regression guard: the AHB byte count must be assigned on EVERY path of the type decision ---
+# Shipped once with `ahbBytes` set only in the "host index already in memoryTypeBits" branch, so
+# the remap path fell through `if (ahb && ahbBytes)` with ahbBytes == 0, released the AHB and took
+# the memfd fallback on device (AHB-FIRST-FALLBACK for 4096 B). The assignment must sit at the
+# same nesting level as the property-query branches, not inside the if/else chain below them.
+lines = state.splitlines()
+def indent_of(predicate, what):
+    for line in lines:
+        if predicate(line):
+            return len(line) - len(line.lstrip())
+    raise AssertionError(f'missing line: {what}')
+
+query_indent = indent_of(lambda l: 'if (ahbRes != VK_SUCCESS) {' in l, 'properties-query branch')
+bytes_indent = indent_of(lambda l: 'ahbBytes = ahbProps.allocationSize' in l, 'ahbBytes assignment')
+assert bytes_indent == query_indent, (
+    'ahbBytes must be assigned once, outside the type decision (indent '
+    f'{bytes_indent} vs {query_indent}); inside it, the remap path leaves it zero and every '
+    'allocation falls back to the memfd')
+remap = state.index('localAllocInfo.memoryTypeIndex = ahbType;', call)
+bytes_assign = state.index('ahbBytes = ahbProps.allocationSize', call)
+assert remap < bytes_assign, 'both the remap and the direct branch must reach the byte count'
+# The other AHB fields are set exactly once, inside the single success path.
+assert state.count('ahbBacking = ahb;') == 1
+assert state.count('ahbBackingBytes = ahbBytes;') == 1
+assert state.index('if (ahb && ahbBytes) {', call) < state.index('ahbBacking = ahb;', call)
+assert state.index('if (ahb && ahbBytes) {', call) < state.index('importInfo.buffer = ahb;', call)
 import_append = state.index("importInfo.buffer = ahb;", call)
 block = state[state.index("AHB-first: the VMM may only map a handle"):import_append]
 # Kill switch: one env var restores the memfd path without a rebuild.
@@ -128,7 +155,8 @@ assert "memoryInfo.ahbBacking = nullptr;" in state[release:release + 400]
 assert "memoryInfo.ahbBackingBytes = 0;" in state[release:release + 400]
 assert state.count("if (ahb) AHardwareBuffer_release(ahb);") == 1
 assert "AHB-FIRST-FALLBACK" in state
-fallback = state.index("AHB-FIRST-FALLBACK")
+# The log call, not the first textual mention: a comment above the release names the tag too.
+fallback = state.index('"AHB-FIRST-FALLBACK:')
 assert state.index("if (ahb) AHardwareBuffer_release(ahb);") < fallback
 
 # 7. Untouched guarantees.
@@ -148,6 +176,9 @@ report = (
     "PASS export returns the stored handle, refuses host-pointer imports, no relock\n"
     "PASS AHB released once after vkFreeMemory and cleared; failure path releases once\n"
     "PASS zero-size guard, host-pointer contract, GpuPool and ColorBuffer AHB paths intact\n"
+    "PASS AHB type remap: host index moved to the AHB type, logged with flags, guest table untouched\n"
+    "PASS ahbBytes set on every path of the type decision (the remap cannot fall back)\n"
+    "PASS runtime identity logged: AHB-FIRST-EXPORT imported/exported/MISMATCH\n"
 )
 print(report, end="")
 if out:

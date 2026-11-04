@@ -239,11 +239,14 @@ edit(
                                     ahbProps.memoryTypeBits);
                             }
                             localAllocInfo.memoryTypeIndex = ahbType;
-                        } else {
-                            ahbBytes = ahbProps.allocationSize
-                                           ? ahbProps.allocationSize
-                                           : localAllocInfo.allocationSize;
                         }
+                        // Both branches need the byte count: the AHB is used either way.
+                        // Leaving it zero here made the caller's `if (ahb && ahbBytes)` false
+                        // and sent every allocation down the memfd fallback (measured on
+                        // device as AHB-FIRST-FALLBACK for 4096 B).
+                        ahbBytes = ahbProps.allocationSize
+                                       ? ahbProps.allocationSize
+                                       : localAllocInfo.allocationSize;
                     }
                     if (ahb && ahbBytes) {
                         if (ahbBytes > localAllocInfo.allocationSize) {
