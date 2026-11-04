@@ -133,14 +133,25 @@ export_fn = export_fn[:export_fn.index("void getSupportedSemaphoreHandleTypes(")
 ahb_case = export_fn[export_fn.index("case ExternalMemory::Mode::AndroidAHB: {"):]
 assert "auto* storedInfo = gfxstream::base::find(mMemoryInfo, memory);" in ahb_case
 assert "if (storedInfo && storedInfo->ahbBacking) {" in ahb_case
-assert "ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);" in ahb_case
+# v5: the guest cannot receive the AHB pointer -- the VMM has no AHB branch and reads it as an
+# fd, so the mapping fails. Export the AHB's own dma-buf fd instead: same pages, no copy, and a
+# descriptor type the VMM already maps.
+assert "AHardwareBuffer_getNativeHandle(ahb)" in ahb_case
+assert "native->data[0]" in ahb_case
+assert "dup(ahbFd)" in ahb_case
+assert "ret.streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF;" in ahb_case
+# Scoped to the AHB-first branch: Class 1's ColorBuffer path legitimately still uses
+# PLATFORM_AHB elsewhere in this function and in the file.
+ahb_first_branch = ahb_case[:ahb_case.index("if (storedInfo && storedInfo->importedHostPointer)")]
+assert "STREAM_HANDLE_TYPE_PLATFORM_AHB" not in ahb_first_branch,     "an AHB pointer is not an fd; the VMM would read it as one and the guest mapping would fail"
+assert "return std::nullopt;" in ahb_case[ahb_case.index("exposes no native dmabuf fd"):]
 assert "AHB-HOSTPTR-CONFLICT" in ahb_case
 # Runtime identity: the export logs imported vs exported and whether they are the same object.
 assert "AHB-FIRST-EXPORT" in ahb_case
-assert 'storedInfo->ahbBacking == (void*)ret.handle ? "same" : "MISMATCH"' in ahb_case
+assert 'ahbFd >= 0 ? "same" : "MISMATCH"' in ahb_case
 assert "AHB-FIRST: size=%llu host-type=%u ahb=%p" in state
 assert "return std::nullopt;" in ahb_case[ahb_case.index("AHB-HOSTPTR-CONFLICT"):]
-stored_ret = ahb_case.index("ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);")
+stored_ret = ahb_case.index("ret.handle = static_cast<ExternalHandleType>(exportFd);")
 conflict = ahb_case.index("AHB-HOSTPTR-CONFLICT")
 driver = ahb_case.index("vk->vkGetMemoryAndroidHardwareBufferANDROID(device, &getAhbInfo")
 assert stored_ret < conflict < driver, "stored handle, then refusal, then the driver"
