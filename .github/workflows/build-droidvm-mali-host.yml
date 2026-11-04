@@ -19,6 +19,7 @@ on:
       - 'scripts/patch_droidvm_mali_host.py'
       - 'scripts/patch_ahb_first_hostvisible.py'
       - 'scripts/test_ahb_first_hostvisible.py'
+      - 'scripts/*render_staging_coherent*'
       - 'scripts/dmabuf_import_guard.h'
       - 'scripts/test_dmabuf_import_guard.cpp'
       - 'scripts/staging_contract.h'
@@ -143,6 +144,14 @@ jobs:
           cp ci/scripts/*niri_image_external_types* out/
           cp ci/scripts/*niri_image_query_trace* out/
           python3 -I ci/scripts/test_niri_image_query_trace.py "$RUNNER_TEMP/niri-image-trace-before" "$GITHUB_WORKSPACE/source" > out/niri-image-query-trace-tests.txt
+
+      - name: Apply and test P0 staging coherence fix (no GPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I ci/scripts/patch_render_staging_coherent.py "$GITHUB_WORKSPACE/source"
+          python3 -I ci/scripts/test_render_staging_coherent.py "$GITHUB_WORKSPACE/source" ci/.github/workflows/build-droidvm-mali-host.yml | tee out/staging-coherent-tests.txt
+          git -C source diff --check
 
       - name: Run host-only DMA_BUF guard mock-dispatch tests (no GPU)
         shell: bash
@@ -368,6 +377,7 @@ jobs:
           cp ci/scripts/*image_view_diag* out/
           cp ci/scripts/*completion_fence_liveness* out/
           cp ci/scripts/*ahb_null_guard* out/
+          cp ci/scripts/*render_staging_coherent* out/
 
       - name: Fetch Android NDK r27c
         shell: bash
