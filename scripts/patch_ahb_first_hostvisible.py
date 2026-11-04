@@ -213,86 +213,27 @@ edit(
                     }
                 }
 #endif
+                // AHB-FIRST: the import above already supplied this allocation's memory. Creating a
+                // memfd and importing its host pointer next to it would give the guest and the GPU
+                // two different objects again. Wrapped rather than rewritten (C++ ignores
+                // indentation) so every upstream line stays byte-identical and the later
+                // host-pointer patch keeps its anchor.
+                if (!ahbBacking) {
                 auto memory = SharedMemory("shared-memory-vk-" + std::to_string(sUniqueShmemId++),
                                            localAllocInfo.allocationSize);
 """,
 )
 
-# ---------------------------------------------------------------------------
-# 5. Do not also create a memfd/host-pointer import when the AHB is the memory.
-# ---------------------------------------------------------------------------
-edit(
-    "host/vulkan/vk_decoder_global_state.cpp",
-    """                } else if (m_vkEmulation->getFeatures().SystemBlob.enabled()) {
-                    int ret = memory.create(0600);
-                    if (ret) {
-                        GFXSTREAM_ERROR(
-                            "Failed to create system-blob host-visible memory, error: %d", ret);
-                        return VK_ERROR_OUT_OF_HOST_MEMORY;
-                    }
-                    mappedPtr = memory.get();
-                    int mappedPtrAlignment =
-                        reinterpret_cast<uintptr_t>(mappedPtr) % kPageSizeforBlob;
-                    if (mappedPtrAlignment != 0) {
-                        GFXSTREAM_ERROR(
-                            "Warning: Mapped shared memory pointer is not aligned to page size, "
-                            "alignment "
-                            "is: %d",
-                            mappedPtrAlignment);
-                    }
-
-                    if (importHostInfo.pHostPointer != nullptr) {
-                        GFXSTREAM_FATAL("%s: Host pointer info is already set import operation!",
-                                        __func__);
-                    }
-                    importHostInfo.pHostPointer = mappedPtr;
-                    vk_append_struct(&structChainIter, &importHostInfo);
-                }
-""",
-    """                } else if (m_vkEmulation->getFeatures().SystemBlob.enabled()) {
-                    // An AHB-first allocation already supplies the memory. Creating a memfd and
-                    // importing its host pointer next to it would make the guest's mapping a
-                    // second object again -- the exact split this patch removes.
-                    if (!ahbBacking) {
-                        int ret = memory.create(0600);
-                        if (ret) {
-                            GFXSTREAM_ERROR(
-                                "Failed to create system-blob host-visible memory, error: %d",
-                                ret);
-                            return VK_ERROR_OUT_OF_HOST_MEMORY;
-                        }
-                        mappedPtr = memory.get();
-                        int mappedPtrAlignment =
-                            reinterpret_cast<uintptr_t>(mappedPtr) % kPageSizeforBlob;
-                        if (mappedPtrAlignment != 0) {
-                            GFXSTREAM_ERROR(
-                                "Warning: Mapped shared memory pointer is not aligned to page "
-                                "size, alignment is: %d",
-                                mappedPtrAlignment);
-                        }
-
-                        if (importHostInfo.pHostPointer != nullptr) {
-                            GFXSTREAM_FATAL(
-                                "%s: Host pointer info is already set import operation!",
-                                __func__);
-                        }
-                        importHostInfo.pHostPointer = mappedPtr;
-                        vk_append_struct(&structChainIter, &importHostInfo);
-                    }
-                }
-""",
-)
-
+# Close the wrapper at the pool gate's own close, in its own edit so the OLD text of the
+# insertion above stays exactly the two upstream lines.
 edit(
     "host/vulkan/vk_decoder_global_state.cpp",
     """                sharedMemory = std::make_optional<SharedMemory>(std::move(memory));
+              }  // if (poolOffset < 0)
 """,
-    """                // Same reason: an uncreated memfd must not be published as the blob's backing,
-                // or the MEM_SHM descriptor would win over the AHB export and hand the VMM an
-                // invalid handle.
-                if (!ahbBacking) {
-                    sharedMemory = std::make_optional<SharedMemory>(std::move(memory));
-                }
+    """                sharedMemory = std::make_optional<SharedMemory>(std::move(memory));
+                }  // if (!ahbBacking)
+              }  // if (poolOffset < 0)
 """,
 )
 
