@@ -47,6 +47,7 @@ on:
       - 'scripts/*image_view_diag*'
       - 'scripts/*completion_fence_liveness*'
       - 'scripts/*ahb_null_guard*'
+      - 'scripts/*ahb_alloc_killswitch*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -356,6 +357,8 @@ jobs:
           python3 -I ci/scripts/test_completion_fence_liveness.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/completion-fence-liveness-tests.txt
           python3 -I ci/scripts/patch_ahb_null_guard.py source
           python3 -I ci/scripts/test_ahb_null_guard.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-null-guard-tests.txt
+          python3 -I ci/scripts/patch_ahb_alloc_killswitch.py source
+          python3 -I ci/scripts/test_ahb_alloc_killswitch.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-alloc-killswitch-tests.txt
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
@@ -377,6 +380,7 @@ jobs:
           cp ci/scripts/*image_view_diag* out/
           cp ci/scripts/*completion_fence_liveness* out/
           cp ci/scripts/*ahb_null_guard* out/
+          cp ci/scripts/*ahb_alloc_killswitch* out/
           cp ci/scripts/*render_staging_coherent* out/
 
       - name: Fetch Android NDK r27c
