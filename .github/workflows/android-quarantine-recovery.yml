@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [diagnostic/crosvm-quarantine-recovery]
-    paths: ['.github/workflows/android-quarantine-recovery.yml', 'scripts/patch_crosvm_mapping_lease.py', 'scripts/patch_crosvm_quarantine_recovery.py', 'scripts/test_crosvm_quarantine_recovery.py', 'scripts/patch_crosvm_bar_offset_diag.py', 'scripts/test_crosvm_bar_offset_diag.py']
+    paths: ['.github/workflows/android-quarantine-recovery.yml', 'scripts/patch_crosvm_mapping_lease.py', 'scripts/patch_crosvm_quarantine_recovery.py', 'scripts/test_crosvm_quarantine_recovery.py', 'scripts/patch_crosvm_bar_offset_diag.py', 'scripts/test_crosvm_bar_offset_diag.py', 'scripts/patch_crosvm_vulkan_import_diag.py', 'scripts/test_crosvm_vulkan_import_diag.py']
 permissions:
   contents: read
   actions: read
@@ -268,11 +268,14 @@ jobs:
           cp trace-patches/scripts/patch_crosvm_mapping_lease.py evidence/
           cp trace-patches/scripts/patch_crosvm_quarantine_recovery.py trace-patches/scripts/test_crosvm_quarantine_recovery.py evidence/
           cp trace-patches/scripts/patch_crosvm_bar_offset_diag.py trace-patches/scripts/test_crosvm_bar_offset_diag.py evidence/
+          cp trace-patches/scripts/patch_crosvm_vulkan_import_diag.py trace-patches/scripts/test_crosvm_vulkan_import_diag.py evidence/
           python3 -I trace-patches/scripts/patch_crosvm_mapping_lease.py "$GITHUB_WORKSPACE/source" | tee evidence/map-lease-patched-sha256.txt
           python3 -I trace-patches/scripts/patch_crosvm_quarantine_recovery.py "$GITHUB_WORKSPACE/source"
           python3 -I trace-patches/scripts/test_crosvm_quarantine_recovery.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
           python3 -I trace-patches/scripts/patch_crosvm_bar_offset_diag.py "$GITHUB_WORKSPACE/source"
           python3 -I trace-patches/scripts/test_crosvm_bar_offset_diag.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
+          python3 -I trace-patches/scripts/patch_crosvm_vulkan_import_diag.py "$GITHUB_WORKSPACE/source"
+          python3 -I trace-patches/scripts/test_crosvm_vulkan_import_diag.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence" "$GITHUB_WORKSPACE/trace-patches/.github/workflows/android-quarantine-recovery.yml"
           python3 -I - <<'PY'
           import difflib
           from pathlib import Path
@@ -298,8 +301,8 @@ jobs:
           PY
           git -C source diff --check
           cd source
-          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-check.log
-          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon' 2>&1 | tee ../evidence/cargo-build.log
+          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano' 2>&1 | tee ../evidence/cargo-check.log
+          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano' 2>&1 | tee ../evidence/cargo-build.log
           cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
           "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
           sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
@@ -355,7 +358,7 @@ jobs:
           for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
           printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
           printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt
-          sha256sum evidence/patch_crosvm_mapping_lease.py evidence/patch_crosvm_quarantine_recovery.py evidence/test_crosvm_quarantine_recovery.py evidence/patch_crosvm_bar_offset_diag.py evidence/test_crosvm_bar_offset_diag.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/map-lease-provenance.sha256
+          sha256sum evidence/patch_crosvm_mapping_lease.py evidence/patch_crosvm_quarantine_recovery.py evidence/test_crosvm_quarantine_recovery.py evidence/patch_crosvm_bar_offset_diag.py evidence/test_crosvm_bar_offset_diag.py evidence/patch_crosvm_vulkan_import_diag.py evidence/test_crosvm_vulkan_import_diag.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/map-lease-provenance.sha256
           test ! -f evidence/crosvm || "$TC/bin/llvm-readelf" --dyn-syms --wide evidence/crosvm > evidence/crosvm-dynamic-symbols.txt
       - name: Upload exact diagnostics
         if: always()
