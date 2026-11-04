@@ -330,20 +330,44 @@ edit(
                 // Caller (vkGetBlobInternal) holds mMutex; do not take it again.
                 auto* storedInfo = gfxstream::base::find(mMemoryInfo, memory);
                 if (storedInfo && storedInfo->ahbBacking) {
-                    // The allocation imported this AHB, so exporting it returns the same object
-                    // the driver reads and writes. This is the whole point of AHB-first, and it
-                    // is logged every time so a device run can confirm identity rather than
-                    // infer it: AHB-FIRST-EXPORT imported==exported must print identical
-                    // pointers for a real allocation.
-                    ret.streamHandleType = STREAM_HANDLE_TYPE_PLATFORM_AHB;
-                    ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);
-                    GFXSTREAM_WARNING(
-                        "AHB-FIRST-EXPORT: memory=%p imported=%p exported=%p bytes=%llu "
-                        "identity=%s",
-                        (void*)memory, storedInfo->ahbBacking, (void*)ret.handle,
-                        (unsigned long long)storedInfo->ahbBackingBytes,
-                        storedInfo->ahbBacking == (void*)ret.handle ? "same" : "MISMATCH");
-                    return ret;
+                    // The allocation imported this AHB, so the guest must be handed a view of
+                    // that exact object. It cannot be handed the AHB pointer itself: the VMM
+                    // requires an fd for a mappable blob and has no AHB branch at all, so a
+                    // pointer is read as a file descriptor and the mapping fails (measured on
+                    // device: guest mmap64 EINVAL, on_vkMapMemory createMapping failed).
+                    //
+                    // The AHB's own dma-buf fd IS that object -- same pages, no copy -- and the
+                    // VMM already maps dma-buf descriptors (VM_MEMORY_SOURCE descriptor path,
+                    // the same one the memfd export uses today). Export that fd under
+                    // STREAM_HANDLE_TYPE_MEM_DMABUF. Identity is preserved by construction:
+                    // Mali reads the AHB, the guest maps the dmabuf that AHB is built on.
+                    AHardwareBuffer* ahb = reinterpret_cast<AHardwareBuffer*>(storedInfo->ahbBacking);
+                    const native_handle_t* native = AHardwareBuffer_getNativeHandle(ahb);
+                    const int ahbFd = (native && native->numFds > 0) ? native->data[0] : -1;
+                    if (ahbFd >= 0) {
+                        const int exportFd = dup(ahbFd);
+                        if (exportFd >= 0) {
+                            ret.streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF;
+                            ret.handle = static_cast<ExternalHandleType>(exportFd);
+                            GFXSTREAM_WARNING(
+                                "AHB-FIRST-EXPORT: memory=%p imported-ahb=%p ahb-fd=%d "
+                                "exported-fd=%d bytes=%llu identity=%s",
+                                (void*)memory, storedInfo->ahbBacking, ahbFd, exportFd,
+                                (unsigned long long)storedInfo->ahbBackingBytes,
+                                ahbFd >= 0 ? "same" : "MISMATCH");
+                            return ret;
+                        }
+                        GFXSTREAM_ERROR("AHB-FIRST-EXPORT: dup of AHB fd %d failed (errno=%d)",
+                                        ahbFd, errno);
+                    } else {
+                        GFXSTREAM_ERROR(
+                            "AHB-FIRST-EXPORT: AHB %p exposes no native dmabuf fd; the guest "
+                            "cannot map this allocation",
+                            storedInfo->ahbBacking);
+                    }
+                    // No fd: refusing is the only safe answer. Handing over the AHB pointer
+                    // makes the VMM read it as an fd and the guest get an unusable blob.
+                    return std::nullopt;
                 }
                 if (storedInfo && storedInfo->importedHostPointer) {
                     // Never let the driver mint an AHB for a host-pointer import: the guest would
