@@ -63,7 +63,16 @@ assert "const std::string value =" in block, "getEnvironmentVariable returns std
 # The host index is never re-mapped (a coherent promise the guest already holds); an AHB whose
 # types exclude it is refused and the memfd path runs. The pre-existing integration test asserts
 # the same, so this patch must not reintroduce `memoryTypeIndex = i`.
-assert "AHB-FIRST-TYPE-REJECT" in block
+# v3: the host index is remapped onto a type the AHB can be imported as, and the remap is
+# logged with the old index, the new index and that type's flags. The guest's own type index is
+# not touched, so its bind stays legal and its visible memory properties are unchanged.
+assert "AHB-FIRST-TYPE-REMAP" in block
+assert "localAllocInfo.memoryTypeIndex = ahbType;" in block
+assert "const uint32_t requestedType = localAllocInfo.memoryTypeIndex;" in block
+assert "(guest type index unchanged)" in block
+# Only the host index inside this allocation is rewritten -- never the guest-visible table.
+assert "mGuestToHostMemoryTypeIndexMap" not in block
+assert "propertyFlags =" not in block
 # Scoped to this patch's block: the pre-existing SystemBlob host-pointer patch legitimately
 # re-selects a type for the memfd import; what must not happen is *this* patch doing it.
 assert "localAllocInfo.memoryTypeIndex = i;" not in block
