@@ -60,9 +60,11 @@ block = state[state.index("AHB-first: the VMM may only map a handle"):import_app
 assert "GFXSTREAM_AHB_FIRST" in block
 assert "value.size() == 1 && value[0] == '0'" in block
 assert "const std::string value =" in block, "getEnvironmentVariable returns std::string"
-# The AHB's own memory types are authoritative; the host index may move, the guest ABI does not.
-assert "AHB-FIRST-TYPE-SWITCH" in block
-assert "localAllocInfo.memoryTypeIndex = i;" in block
+# The host index is never re-mapped (a coherent promise the guest already holds); an AHB whose
+# types exclude it is refused and the memfd path runs. The pre-existing integration test asserts
+# the same, so this patch must not reintroduce `memoryTypeIndex = i`.
+assert "AHB-FIRST-TYPE-REJECT" in block
+assert "localAllocInfo.memoryTypeIndex = i;" not in state
 # No dedicated struct is appended here: the guest cannot name the buffer before bind, so an
 # empty VkMemoryDedicatedAllocateInfo would be a no-op (and a diff with no effect).
 assert "localDedicatedAllocInfo" not in block
