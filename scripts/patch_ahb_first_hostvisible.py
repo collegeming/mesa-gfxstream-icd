@@ -176,15 +176,69 @@ edit(
                         } else if (localAllocInfo.memoryTypeIndex >= 32 ||
                                    (ahbProps.memoryTypeBits &
                                     (uint32_t{1} << localAllocInfo.memoryTypeIndex)) == 0) {
-                            // The host index is the guest's own type mapped through the
-                            // memory-properties table. Re-mapping it would change the
-                            // coherent promise the guest was already given, and the existing
-                            // host-memory contract test forbids it. Refuse the AHB here and
-                            // let the memfd path run instead.
-                            GFXSTREAM_ERROR(
-                                "AHB-FIRST-TYPE-REJECT: AHB memory types 0x%x exclude "
-                                "host index %u; keeping the memfd path",
-                                ahbProps.memoryTypeBits, localAllocInfo.memoryTypeIndex);
+                            // v3: serve the guest's host-visible request from the memory type
+                            // the AHB can actually be imported as.
+                            //
+                            // The guest asked for type 8 (DEVICE_LOCAL|HOST_VISIBLE|
+                            // HOST_COHERENT) but Mali imports AHBs only on type 1
+                            // (DEVICE_LOCAL|HOST_VISIBLE|HOST_CACHED) -- measured on device:
+                            // AHB bits 0x2, buffer requirements 0x4100 (types 8 and 14).
+                            //
+                            // Remapping the *host* index here is not a new promise: the memfd
+                            // path in this same function already does exactly this
+                            // (patch_systemblob_host_pointer_type.py prints
+                            // "SYSBLOB-HOSTPTR: memoryTypeIndex 8 -> 1"), and buffers bind
+                            // successfully at host index 1 (BIND-BEFORE-MEM ... memindex=1 in the
+                            // device logs). The guest's own type index is untouched, so its bind
+                            // stays legal and its visible memory properties are unchanged.
+                            //
+                            // The old invariant "the host index never changes" was protecting a
+                            // coherent guarantee that does not hold in this configuration: the
+                            // 4096 B bidirectional probe showed the guest's mapping and the
+                            // host memfd are different objects, so there was never shared
+                            // coherent memory to protect. What must hold instead is one object:
+                            // the handle exported is the handle imported (checked at export and
+                            // logged as AHB-FIRST-EXPORT ... identity=same).
+                            const uint32_t requestedType = localAllocInfo.memoryTypeIndex;
+                            uint32_t ahbType = UINT32_MAX;
+                            for (uint32_t i = 0; i <= 31; ++i) {
+                                if (ahbProps.memoryTypeBits & (uint32_t{1} << i)) {
+                                    ahbType = i;
+                                    break;
+                                }
+                            }
+                            static std::atomic<unsigned> sAhbFirstTypeRemaps{0};
+                            if (sAhbFirstTypeRemaps.fetch_add(1) < 16) {
+                                // Flags of the type actually used, read the same way the
+                                // allocation path reads them (host memory properties).
+                                uint32_t ahbTypeFlags = 0;
+                                {
+                                    std::lock_guard<std::mutex> remapLock(mMutex);
+                                    const auto* remapDeviceInfo =
+                                        gfxstream::base::find(mDeviceInfo, device);
+                                    const auto* remapPhysdevInfo =
+                                        remapDeviceInfo
+                                            ? gfxstream::base::find(
+                                                  mPhysdevInfo, remapDeviceInfo->physicalDevice)
+                                            : nullptr;
+                                    if (remapPhysdevInfo && remapPhysdevInfo->memoryPropertiesHelper) {
+                                        const auto& hostProps = remapPhysdevInfo
+                                                                    ->memoryPropertiesHelper
+                                                                    ->getHostMemoryProperties();
+                                        if (ahbType < hostProps.memoryTypeCount) {
+                                            ahbTypeFlags =
+                                                (uint32_t)hostProps.memoryTypes[ahbType]
+                                                    .propertyFlags;
+                                        }
+                                    }
+                                }
+                                GFXSTREAM_WARNING(
+                                    "AHB-FIRST-TYPE-REMAP: host %u -> %u flags=0x%x ahb-bits=0x%x "
+                                    "(guest type index unchanged)",
+                                    requestedType, ahbType, ahbTypeFlags,
+                                    ahbProps.memoryTypeBits);
+                            }
+                            localAllocInfo.memoryTypeIndex = ahbType;
                         } else {
                             ahbBytes = ahbProps.allocationSize
                                            ? ahbProps.allocationSize
