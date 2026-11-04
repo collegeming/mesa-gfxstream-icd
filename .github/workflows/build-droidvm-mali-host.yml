@@ -128,7 +128,7 @@ jobs:
           git -C source diff --stat -- . ':!third_party/vulkan_headers'
           cp ci/scripts/patch_droidvm_build.py ci/scripts/patch_droidvm_mali_host.py out/
           cp ci/scripts/patch_ahb_first_hostvisible.py ci/scripts/test_ahb_first_hostvisible.py out/
-          mkdir -p out/ahb-first && cp -r "$GITHUB_WORKSPACE/out-ahb-first"/* out/ahb-first/ 2>/dev/null || true
+          cp "$GITHUB_WORKSPACE/out-ahb-first"/* out/ 2>/dev/null || true
           cp ci/.github/workflows/build-droidvm-mali-host.yml out/
           cp ci/scripts/dmabuf_import_guard.h ci/scripts/test_dmabuf_import_guard.cpp out/
           cp ci/scripts/staging_contract.h ci/scripts/test_staging_contract.cpp out/
