@@ -200,10 +200,10 @@ edit(
                         ahbBacking = ahb;
                         ahbBackingBytes = ahbBytes;
                         GFXSTREAM_WARNING(
-                            "AHB-FIRST: size=%llu host-type=%u -> one allocation shared by guest "
-                            "and GPU",
+                            "AHB-FIRST: size=%llu host-type=%u ahb=%p -> one allocation shared "
+                            "by guest and GPU",
                             (unsigned long long)localAllocInfo.allocationSize,
-                            localAllocInfo.memoryTypeIndex);
+                            localAllocInfo.memoryTypeIndex, (void*)ahb);
                     } else {
                         if (ahb) AHardwareBuffer_release(ahb);
                         GFXSTREAM_WARNING(
@@ -274,9 +274,18 @@ edit(
                 auto* storedInfo = gfxstream::base::find(mMemoryInfo, memory);
                 if (storedInfo && storedInfo->ahbBacking) {
                     // The allocation imported this AHB, so exporting it returns the same object
-                    // the driver reads and writes. This is the whole point of AHB-first.
+                    // the driver reads and writes. This is the whole point of AHB-first, and it
+                    // is logged every time so a device run can confirm identity rather than
+                    // infer it: AHB-FIRST-EXPORT imported==exported must print identical
+                    // pointers for a real allocation.
                     ret.streamHandleType = STREAM_HANDLE_TYPE_PLATFORM_AHB;
                     ret.handle = reinterpret_cast<ExternalHandleType>(storedInfo->ahbBacking);
+                    GFXSTREAM_WARNING(
+                        "AHB-FIRST-EXPORT: memory=%p imported=%p exported=%p bytes=%llu "
+                        "identity=%s",
+                        (void*)memory, storedInfo->ahbBacking, (void*)ret.handle,
+                        (unsigned long long)storedInfo->ahbBackingBytes,
+                        storedInfo->ahbBacking == (void*)ret.handle ? "same" : "MISMATCH");
                     return ret;
                 }
                 if (storedInfo && storedInfo->importedHostPointer) {
