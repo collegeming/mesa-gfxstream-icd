@@ -1,8 +1,8 @@
-name: crosvm-quarantine-recovery
+name: crosvm-native-audio
 on:
   workflow_dispatch:
   push:
-    branches: [diagnostic/crosvm-quarantine-recovery]
+    branches: [diagnostic/crosvm-native-audio]
     paths: ['.github/workflows/android-quarantine-recovery.yml', 'scripts/patch_crosvm_mapping_lease.py', 'scripts/patch_crosvm_quarantine_recovery.py', 'scripts/test_crosvm_quarantine_recovery.py', 'scripts/patch_crosvm_bar_offset_diag.py', 'scripts/test_crosvm_bar_offset_diag.py', 'scripts/patch_crosvm_vulkan_import_diag.py', 'scripts/test_crosvm_vulkan_import_diag.py', 'scripts/patch_crosvm_vulkano_gralloc_gate.py', 'scripts/test_crosvm_vulkano_gralloc_gate.py']
 permissions:
   contents: read
@@ -406,7 +406,9 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/native-headers"
           cp /usr/include/wayland*.h "$GITHUB_WORKSPACE/native-headers/"
           export CFLAGS_aarch64_linux_android="-I$GITHUB_WORKSPACE/native-headers"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN/../lib -C link-arg=-Wl,--whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/libcrosvm_android_display_client.a -C link-arg=-Wl,--no-whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libbinder_ndk.so -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libnativewindow.so -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++_static.a -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++abi.a"
+          # android_audio declares the AAudio C API without a #[link] attribute; the Soong
+          # build adds libaaudio to shared_libs. Cargo has no such rule, so name it here.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN/../lib -C link-arg=-Wl,--whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/libcrosvm_android_display_client.a -C link-arg=-Wl,--no-whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libbinder_ndk.so -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libnativewindow.so -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++_static.a -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++abi.a -C link-arg=-laaudio"
           # Minijail's generic Cargo script invents a GCC prefix. Select the genuine NDK tools
           # and build only the static archive the Rust script actually links (not unused CLI/shared targets).
           python3 -I - <<'PY'
@@ -549,8 +551,8 @@ jobs:
           PY
           git -C source diff --check
           cd source
-          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display' 2>&1 | tee ../evidence/cargo-check.log
-          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display' 2>&1 | tee ../evidence/cargo-build.log
+          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display,audio,audio_aaudio' 2>&1 | tee ../evidence/cargo-check.log
+          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display,audio,audio_aaudio' 2>&1 | tee ../evidence/cargo-build.log
           cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
           "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
           sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
@@ -567,7 +569,7 @@ jobs:
           python3 -I - <<'PY'
           import json, re, subprocess, os
           from pathlib import Path
-          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so','libz.so','libbinder_ndk.so','libnativewindow.so'}
+          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libaaudio.so','libdl.so','libm.so','libc.so','libz.so','libbinder_ndk.so','libnativewindow.so'}
           runtime = Path('../evidence/runtime')
           closure = {}
           files = [p for p in runtime.rglob('*') if p.is_file()]
@@ -580,6 +582,7 @@ jobs:
               closure[path.name] = needed
           Path('../evidence/dependency-closure.json').write_text(json.dumps({'android_api':33, 'system_libraries':sorted(platform), 'needed':closure}, indent=2))
           PY
+          grep -q 'libaaudio.so' ../evidence/runtime-dependencies.txt
       - name: Save pinned Android input cache
         if: always()
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
@@ -603,17 +606,19 @@ jobs:
           test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
           git -C source diff --binary > evidence/source.patch
           git -C minijail diff --binary > evidence/minijail.patch
-          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display. VNC uses the fork bridge C compiled against LibVNCServer 0.9.15 headers and linked to the DroidVM APK libvncserver.so; native display links the DroidVM libcrosvm_android_display_client ABI compiled with the NDK AIDL backend, and its link-time binder/nativewindow import stubs resolve to the platform libraries at runtime. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No runtime stubs or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
+          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display,audio,audio_aaudio. VNC uses the fork bridge C compiled against LibVNCServer 0.9.15 headers and linked to the DroidVM APK libvncserver.so; native display links the DroidVM libcrosvm_android_display_client ABI compiled with the NDK AIDL backend, and its link-time binder/nativewindow import stubs resolve to the platform libraries at runtime. audio is virtio-snd (devices/audio) with the AAudio backend (devices/audio_aaudio), linked against the platform libaaudio.so; the null and file backends are also built in. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No runtime stubs or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
           for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
           printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
           printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt
           sha256sum evidence/patch_crosvm_mapping_lease.py evidence/patch_crosvm_quarantine_recovery.py evidence/test_crosvm_quarantine_recovery.py evidence/patch_crosvm_bar_offset_diag.py evidence/test_crosvm_bar_offset_diag.py evidence/patch_crosvm_vulkan_import_diag.py evidence/test_crosvm_vulkan_import_diag.py evidence/patch_crosvm_vulkano_gralloc_gate.py evidence/test_crosvm_vulkano_gralloc_gate.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/map-lease-provenance.sha256
           test ! -f evidence/crosvm || "$TC/bin/llvm-readelf" --dyn-syms --wide evidence/crosvm > evidence/crosvm-dynamic-symbols.txt
+          test ! -f evidence/crosvm || grep -a -c 'AAudio_createStreamBuilder' evidence/crosvm > evidence/aaudio-symbol-count.txt || true
+          test ! -f evidence/crosvm || grep -a -c 'virtio-snd' evidence/crosvm > evidence/virtio-snd-string-count.txt || true
       - name: Upload exact diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: crosvm-map-lease-${{ github.run_id }}
+          name: crosvm-native-audio-${{ github.run_id }}
           path: evidence/
           retention-days: 14
 
