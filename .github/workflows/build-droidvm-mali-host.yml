@@ -49,6 +49,7 @@ on:
       - 'scripts/*ahb_null_guard*'
       - 'scripts/*ahb_import_null_guard*'
       - 'scripts/*ahb_export_guard*'
+      - 'scripts/*ahb_blob_export_guard*'
       - 'scripts/*ahb_alloc_killswitch*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
@@ -382,6 +383,14 @@ jobs:
             -I"$GITHUB_WORKSPACE/vulkan-headers/include" \
             ci/scripts/test_ahb_export_guard.cpp -o "$RUNNER_TEMP/test-ahb-export-guard"
           "$RUNNER_TEMP/test-ahb-export-guard" | tee out/ahb-export-guard-unit-tests.txt
+          python3 -I ci/scripts/patch_ahb_blob_export_guard.py source
+          git -C source add -N host/vulkan/ahb_blob_export_guard.h
+          python3 -I ci/scripts/test_ahb_blob_export_guard.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-blob-export-guard-tests.txt
+          c++ -std=c++17 -Wall -Wextra -Werror -pthread \
+            -I"$GITHUB_WORKSPACE/source/host/vulkan" \
+            -I"$GITHUB_WORKSPACE/vulkan-headers/include" \
+            ci/scripts/test_ahb_blob_export_guard.cpp -o "$RUNNER_TEMP/test-ahb-blob-export-guard"
+          "$RUNNER_TEMP/test-ahb-blob-export-guard" | tee out/ahb-blob-export-guard-unit-tests.txt
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
@@ -405,8 +414,10 @@ jobs:
           cp ci/scripts/*ahb_null_guard* out/
           cp ci/scripts/*ahb_import_null_guard* out/
           cp ci/scripts/*ahb_export_guard* out/
+          cp ci/scripts/*ahb_blob_export_guard* out/
           cp source/host/vulkan/ahb_import_guard.h out/
           cp source/host/vulkan/ahb_export_guard.h out/
+          cp source/host/vulkan/ahb_blob_export_guard.h out/
           cp ci/scripts/*ahb_alloc_killswitch* out/
           cp source/host/vulkan/ahb_alloc_off_file.h out/
           cp ci/scripts/*render_staging_coherent* out/
