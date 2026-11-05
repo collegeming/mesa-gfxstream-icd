@@ -74,6 +74,13 @@ jobs:
           ref: b2649cb3ee6bd70828a17e50beb16591e6066288
           path: wayland-source
           persist-credentials: false
+      - name: Checkout LibVNCServer 0.9.15 headers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: LibVNC/libvncserver
+          ref: 9b54b1ec32731bd23158ca014dc18014db4194c3
+          path: libvncserver-source
+          persist-credentials: false
       - name: Restore pinned Android native inputs
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
         with:
@@ -155,6 +162,64 @@ jobs:
           cp wayland-build/src/libwayland-client.a "$PREFIX/lib/libffi.a" native-libs/
           find wayland-build -name '*.a' -print | tee evidence/wayland-static-archives.txt
           sha256sum native-libs/* | tee evidence/native-checksums.txt
+      - name: Build the VNC server bridge against the APK's LibVNCServer
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Soong build compiles this bridge as libvnc_server_bridge and links the
+          # libvncserver.so the app ships. Cargo has no such rule, so build the same two
+          # C files here and link the APK's own library rather than a stub.
+          cp extracted/apk/lib/arm64-v8a/libvncserver.so native-libs/
+          python3 -I - <<'PY'
+          from pathlib import Path
+          cfg = Path('libvncserver-source/include/rfb/rfbconfig.h')
+          cfg.write_text('''\
+#ifndef _RFB_RFBCONFIG_H
+#define _RFB_RFBCONFIG_H 1
+#define LIBVNCSERVER_ALLOW24BPP 1
+#define LIBVNCSERVER_HAVE_DIRENT_H 1
+#define LIBVNCSERVER_HAVE_ENDIAN_H 1
+#define LIBVNCSERVER_HAVE_FCNTL_H 1
+#define LIBVNCSERVER_HAVE_GETTIMEOFDAY 1
+#define LIBVNCSERVER_HAVE_GETHOSTBYNAME 1
+#define LIBVNCSERVER_HAVE_GETHOSTNAME 1
+#define LIBVNCSERVER_HAVE_INET_NTOA 1
+#define LIBVNCSERVER_HAVE_LIBPTHREAD 1
+#define LIBVNCSERVER_HAVE_LIBZ 1
+#define LIBVNCSERVER_HAVE_MMAP 1
+#define LIBVNCSERVER_HAVE_NETINET_IN_H 1
+#define LIBVNCSERVER_HAVE_SELECT 1
+#define LIBVNCSERVER_HAVE_SOCKET 1
+#define LIBVNCSERVER_HAVE_STRDUP 1
+#define LIBVNCSERVER_HAVE_SYS_SOCKET_H 1
+#define LIBVNCSERVER_HAVE_SYS_STAT_H 1
+#define LIBVNCSERVER_HAVE_SYS_TIME_H 1
+#define LIBVNCSERVER_HAVE_SYS_TYPES_H 1
+#define LIBVNCSERVER_HAVE_SYS_WAIT_H 1
+#define LIBVNCSERVER_HAVE_SYS_UIO_H 1
+#define LIBVNCSERVER_HAVE_UNISTD_H 1
+#define LIBVNCSERVER_HAVE_FORK 1
+#define LIBVNCSERVER_HAVE_WORKING_FORK 1
+#define LIBVNCSERVER_IPv6 1
+#define LIBVNCSERVER_PACKAGE_STRING "LibVNCServer 0.9.15"
+#define LIBVNCSERVER_PACKAGE_VERSION "0.9.15"
+#define LIBVNCSERVER_VERSION "0.9.15"
+#define LIBVNCSERVER_VERSION_MAJOR "0"
+#define LIBVNCSERVER_VERSION_MINOR "9"
+#define LIBVNCSERVER_VERSION_PATCHLEVEL "15"
+#define HAVE_LIBVNCSERVER_PID_T 1
+#define HAVE_LIBVNCSERVER_SIZE_T 1
+#define HAVE_LIBVNCSERVER_SOCKLEN_T 1
+#endif
+''')
+          PY
+          VNC_CFLAGS="-std=gnu11 -fPIC -O2 -DANDROID -I$GITHUB_WORKSPACE/libvncserver-source/include -I$GITHUB_WORKSPACE/source/gpu_display/src"
+          "$TC/bin/aarch64-linux-android33-clang" $VNC_CFLAGS -c source/gpu_display/src/vnc_server_bridge.c -o vnc_server_bridge.o
+          "$TC/bin/aarch64-linux-android33-clang" $VNC_CFLAGS -c source/gpu_display/src/vnc_h264_rfb.c -o vnc_h264_rfb.o
+          "$TC/bin/llvm-ar" rcs native-libs/libvnc_server_bridge.a vnc_server_bridge.o vnc_h264_rfb.o
+          "$TC/bin/llvm-nm" -g --defined-only native-libs/libvnc_server_bridge.a > evidence/vnc-bridge-symbols.txt
+          "$TC/bin/llvm-readelf" -d native-libs/libvncserver.so > evidence/libvncserver-elf.txt
+          sha256sum native-libs/libvncserver.so native-libs/libvnc_server_bridge.a | tee evidence/vnc-native-checksums.txt
       - name: Android Cargo check discovery (real native build scripts, no stubs)
         shell: bash
         run: |
@@ -255,11 +320,17 @@ jobs:
           s = s.replace(old, '        // Public API30+: child logs use stderr, never the stale inherited logd socket.\n        unsafe { __android_log_set_logger(Some(__android_log_stderr_logger)) };')
           p.write_text(s)
           # Wayland's real static client archive also needs its real private and libffi archives.
+          # The VNC feature needs the bridge archive the step above builds and the APK's
+          # libvncserver.so at link time; both live in native-libs.
           p = Path('source/gpu_display/build.rs')
           s = p.read_text()
           old = 'println!("cargo:rustc-link-lib=dylib=wayland-client");'
           assert s.count(old) == 1
-          p.write_text(s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=ffi");\n    println!("cargo:rustc-link-lib=static=ndk-builtins");'))
+          s = s.replace(old, 'println!("cargo:rustc-link-lib=static=wayland-client");\n    println!("cargo:rustc-link-lib=static=ffi");\n    println!("cargo:rustc-link-lib=static=ndk-builtins");')
+          old_main = '    match std::env::var("CARGO_CFG_TARGET_OS").as_deref().unwrap() {'
+          assert s.count(old_main) == 1
+          s = s.replace(old_main, '    if std::env::var_os("CARGO_FEATURE_VNC").is_some() {\n        println!("cargo:rustc-link-search=native={}", Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../native-libs").display());\n        println!("cargo:rustc-link-lib=static=vnc_server_bridge");\n        println!("cargo:rustc-link-lib=dylib=vncserver");\n    }\n' + old_main)
+          p.write_text(s)
           PY
           # Metadata-only increment AFTER all proven paired/Android source compatibility fixes.
           git -C source diff --binary > evidence/source-before-gpu-create-trace.patch
@@ -315,6 +386,7 @@ jobs:
           mkdir -p ../evidence/runtime/bin ../evidence/runtime/lib ../evidence/symbols
           cp ../evidence/crosvm ../evidence/runtime/bin/crosvm
           cp ../native-libs/libgfxstream_backend.so ../evidence/runtime/lib/
+          cp ../native-libs/libvncserver.so ../evidence/runtime/lib/
           "$TC/bin/llvm-objcopy" --only-keep-debug ../evidence/crosvm ../evidence/symbols/crosvm.debug
           "$TC/bin/llvm-strip" --strip-debug ../evidence/runtime/bin/crosvm
           "$TC/bin/llvm-readelf" -h -l -d -n ../evidence/runtime/bin/crosvm > ../evidence/runtime-crosvm-elf.txt
@@ -324,7 +396,7 @@ jobs:
           python3 -I - <<'PY'
           import json, re, subprocess, os
           from pathlib import Path
-          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so'}
+          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so','libz.so'}
           runtime = Path('../evidence/runtime')
           closure = {}
           files = [p for p in runtime.rglob('*') if p.is_file()]
@@ -360,7 +432,7 @@ jobs:
           test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
           git -C source diff --binary > evidence/source.patch
           git -C minijail diff --binary > evidence/minijail.patch
-          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon. Built-in headless display; no Android AIDL display or VNC. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No local compilation, stubs, or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
+          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc. VNC uses the fork bridge C compiled against LibVNCServer 0.9.15 headers and linked to the DroidVM APK libvncserver.so; no Android AIDL display. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No stubs or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
           for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
           printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
           printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt

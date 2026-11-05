@@ -59,15 +59,15 @@ assert vulkan_arm.count('device_id,') >= 1
 
 # 5. the feature probe is wired into both cargo invocations (when the workflow is supplied).
 if workflow:
-    assert workflow.count(",vulkano'") == 2, workflow.count(",vulkano'")
-    assert workflow.count("--features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano'") == 2
+    assert workflow.count(",vulkano,vnc'") == 2, workflow.count(",vulkano,vnc'")
+    assert workflow.count("--features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc'") == 2
 
 report = (
     'PASS three import failures distinguished: no-backend / no-vulkano / import-failed\n'
     'PASS guest-visible error stays EINVAL in all three arms\n'
     'PASS missing-VulkanInfo decision logged with res/handle_type/size\n'
     'PASS DeviceId never formatted with {:?}\n'
-    'PASS vulkano present in both cargo check and cargo build feature lists\n'
+    'PASS vulkano and vnc present in both cargo check and cargo build feature lists\n'
 )
 print(report, end='')
 if out:
