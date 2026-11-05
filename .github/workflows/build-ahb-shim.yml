@@ -1,9 +1,10 @@
 name: build-ahb-shim
 
 # Builds scripts/ahb_shim.c as an arm64-v8a LD_PRELOAD shim that intercepts
-# AHardwareBuffer_acquire/release.  A NULL acquire is logged with the caller
-# module+offset and returns instead of faulting in RefBase::incStrong.
-# Diagnostic only; no gfxstream sources are involved.
+# AHardwareBuffer_acquire/release.  A NULL acquire or release is logged with the
+# caller module+offset (release-null is rate limited) and returns instead of
+# faulting in RefBase::incStrong/decStrong.  Diagnostic only; no gfxstream
+# sources are involved.
 
 on:
   workflow_dispatch:
@@ -61,6 +62,73 @@ jobs:
             exit 1
           fi
           echo "no libnativewindow dependency (real symbol is resolved via dlsym)"
+          echo "== imports that must not exist (NULL path is heap/lock/stdio free) =="
+          "$NDK_BIN/llvm-nm" -D libahb_shim.so | tee dynsyms-all.txt
+          if grep -Eq '[[:space:]](malloc|calloc|realloc|free|printf|fprintf|pthread_mutex_lock|pthread_mutex_unlock)$' dynsyms-all.txt; then
+            echo "::error::shim must not import heap/stdio/lock symbols"
+            exit 1
+          fi
+          echo "no malloc/printf/pthread imports"
+
+      - name: Static checks (NULL paths never resolve or tail-call the real symbol)
+        run: |
+          set -euo pipefail
+          "$NDK_BIN/llvm-objdump" -d --no-show-raw-insn libahb_shim.so | tee disasm.txt
+          python3 scripts/ahb_shim_checks.py "$NDK_BIN/llvm-objdump" libahb_shim.so
+
+      - name: Host unit test (x86, same source and warning flags)
+        run: |
+          set -euo pipefail
+          mkdir -p hosttest
+          cd hosttest
+          cc -shared -fPIC -O2 -Wall -Wextra -Werror -DAHB_SHIM_STUB \
+            -o libahb_stub.so ../scripts/ahb_shim_test.c
+          cc -O2 -Wall -Wextra -Werror -o ahb_shim_test \
+            ../scripts/ahb_shim_test.c -L. -lahb_stub -Wl,-rpath,'$ORIGIN'
+          cc -shared -fPIC -O2 -Wall -Wextra -Werror -o libahb_shim_host.so \
+            ../scripts/ahb_shim.c
+
+          run_case() {
+            case_name="$1"
+            shift
+            env LD_PRELOAD="$PWD/libahb_shim_host.so" "$@" \
+              ./ahb_shim_test "$case_name" 2>&1
+          }
+          count() {
+            printf '%s\n' "$1" | grep -c "$2" || true
+          }
+
+          echo "== case: NULL release must log once and never reach the real fn =="
+          out=$(run_case null-release)
+          printf '%s\n' "$out"
+          test "$(count "$out" 'AHB-SHIM release-null caller=0x')" -eq 1
+          test "$(count "$out" 'REAL release')" -eq 0
+          printf '%s\n' "$out" | grep -q 'SUMMARY real-acquire=0 real-release=0'
+
+          echo "== case: 30x NULL release stays rate limited =="
+          out=$(run_case null-release-many)
+          lines=$(count "$out" 'AHB-SHIM release-null caller=0x')
+          echo "release-null lines: $lines"
+          test "$lines" -ge 1
+          test "$lines" -le 8
+          test "$(count "$out" 'REAL release')" -eq 0
+
+          echo "== case: NULL acquire unchanged (log once, not forwarded) =="
+          out=$(run_case null-acquire)
+          test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 1
+          test "$(count "$out" 'REAL acquire')" -eq 0
+
+          echo "== case: non-NULL adds no log by default (banner only) =="
+          out=$(run_case non-null)
+          printf '%s\n' "$out"
+          test "$(count "$out" '^AHB-SHIM ')" -eq 1
+          test "$(count "$out" 'acquire-null\|release-null')" -eq 0
+          printf '%s\n' "$out" | grep -q 'SUMMARY real-acquire=1 real-release=1'
+
+          echo "== case: release tracing stays opt-in =="
+          out=$(run_case non-null AHB_SHIM_TRACE_RELEASE=1)
+          test "$(count "$out" 'AHB-SHIM release ptr=')" -eq 1
+          echo "host unit tests PASS"
 
       - uses: actions/upload-artifact@v4
         with:
