@@ -101,7 +101,7 @@ static void shim_emit(const char *buf, int n)
 
 /* Track how much of a stack block snprintf() actually used.  A truncated
  * snprintf() still returns the would-be length, so clamp to the buffer end. */
-static size_t shim_append(char *buf, size_t cap, size_t off, int n)
+static size_t shim_append(size_t cap, size_t off, int n)
 {
     size_t add;
 
@@ -184,7 +184,7 @@ shim_log_null(void *caller, const char *kind, unsigned *seen)
     n = snprintf(block, sizeof(block),
                  "AHB-SHIM %s caller=%p module=%s+0x%lx tid=%d\n",
                  kind, caller, module, offset, shim_tid());
-    off = shim_append(block, sizeof(block), 0, n);
+    off = shim_append(sizeof(block), 0, n);
 
     bt.count = 0;
     bt.max = g_frames;
@@ -218,7 +218,7 @@ shim_log_null(void *caller, const char *kind, unsigned *seen)
         if (n <= 0) {
             break;
         }
-        off = shim_append(block, sizeof(block), off, n);
+        off = shim_append(sizeof(block), off, n);
         printed++;
     }
 
