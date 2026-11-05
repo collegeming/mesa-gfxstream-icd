@@ -50,6 +50,7 @@ on:
       - 'scripts/*ahb_alloc_killswitch*'
       - 'scripts/*ahb_crash_stack*'
       - 'scripts/ahb_crash_trace.h'
+      - 'scripts/*ahb_keep_alive*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -375,6 +376,15 @@ jobs:
           cp ci/scripts/patch_ahb_crash_stack.py ci/scripts/test_ahb_crash_stack.py ci/scripts/test_ahb_crash_stack.cpp out/
           cp source/host/vulkan/ahb_crash_trace.h out/
           git -C source add -N host/vulkan/ahb_crash_trace.h
+          python3 -I ci/scripts/patch_ahb_keep_alive.py source
+          python3 -I ci/scripts/test_ahb_keep_alive.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-keep-alive-tests.txt
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror -fno-omit-frame-pointer \
+            -I source/host/vulkan \
+            ci/scripts/test_ahb_keep_alive.cpp -o "$RUNNER_TEMP/test-ahb-keep-alive"
+          "$RUNNER_TEMP/test-ahb-keep-alive" 2>/dev/null | tee out/ahb-keep-alive-unit-tests.txt
+          cp ci/scripts/patch_ahb_keep_alive.py ci/scripts/test_ahb_keep_alive.py ci/scripts/test_ahb_keep_alive.cpp out/
+          cp source/host/vulkan/ahb_keep_alive.h out/
+          git -C source add -N host/vulkan/ahb_keep_alive.h
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
