@@ -56,6 +56,7 @@ int main() {
     pid_t pid = fork();
     if (pid == 0) {
         setenv("GFXSTREAM_CRASH_TRACE", "1", 1);
+        trace::ResetEnabledCacheForTest();
         bool first = trace::InstallIfEnabled();
         bool second = trace::InstallIfEnabled();
         _exit((first && !second) ? 0 : 1);
@@ -72,6 +73,7 @@ int main() {
     if (pid == 0) {
         setenv("GFXSTREAM_CRASH_TRACE", "1", 1);
         setenv("GFXSTREAM_CRASH_TRACE_FILE", tracePath, 1);
+        trace::ResetEnabledCacheForTest();
         trace::InstallIfEnabled();
         trace::Breadcrumb("unit-test.allocAhb.enter", nullptr, 65536);
         trace::Breadcrumb("unit-test.import", reinterpret_cast<const void*>(0x1234), 7);
