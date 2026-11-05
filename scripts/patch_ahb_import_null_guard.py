@@ -32,9 +32,16 @@ What
 5. Both appendExternalMemoryImport callers return the recorded result instead of the
    generic "unsupported external memory handle type" failure.
 
-Only the AndroidHardwareBuffer branch changes. OpaqueFd and DmaBuf keep reading
+v2 adds the guest-supplied pNext import, which is forwarded to the driver untouched:
+6. In on_vkAllocateMemory, a VkImportAndroidHardwareBufferInfoANDROID found in the
+   guest chain whose buffer is null or below 4096 is refused before the diagnostic
+   fields are set: one AHB-IMPORT-NULL guest-buffer=%p line per process,
+   VK_ERROR_INVALID_EXTERNAL_HANDLE returned, and diagnosticAhb/diagnosticStreamType
+   stay unset. A plausible guest buffer keeps the original assignments byte-identical.
+
+Only the AndroidHardwareBuffer import changes. OpaqueFd and DmaBuf keep reading
 getFd(); no other import kind casts a handle to a pointer. A plausible address takes
-the original assignment with the original bit pattern: the guard adds one comparison
+the original assignment with the original bit pattern: each guard adds one comparison
 and one branch, and nothing runs on the legal path beyond that.
 
 The script is idempotent: a second run verifies the header and the AHB-IMPORT-NULL-*
@@ -93,6 +100,13 @@ constexpr bool AhbImportHandleIsPlausible(int64_t handle) {
 // console pipe, but the first occurrence still identifies the path. The function-local
 // static in an inline function is shared by every caller in the process.
 inline bool ShouldLogImportFailure() {
+    static std::atomic<unsigned> sLogged{0};
+    return sLogged.fetch_add(1, std::memory_order_relaxed) == 0;
+}
+
+// Separate gate for the guest-supplied pNext import, so both sites can report their
+// first occurrence independently without one hiding the other.
+inline bool ShouldLogGuestBufferFailure() {
     static std::atomic<unsigned> sLogged{0};
     return sLogged.fetch_add(1, std::memory_order_relaxed) == 0;
 }
@@ -189,6 +203,33 @@ BUFFER_GUARDED = """\
                 }
 """
 
+# The diagnostic block is created earlier by patch_droidvm_mali_host.py. The trace
+# build adds its breadcrumb after the two assignments; the `if` and first assignment
+# stay contiguous there, so this anchor works with or without that patch.
+GUEST_IF = """\
+        if (diagnosticAhbInfo) {
+"""
+GUEST_BEGIN = "            // AHB-IMPORT-NULL-GUEST-BEGIN\n"
+GUEST_END = "            // AHB-IMPORT-NULL-GUEST-END\n"
+GUEST_GUARD = (
+    GUEST_BEGIN
+    + """\
+            // A guest-supplied VkImportAndroidHardwareBufferInfoANDROID goes to the driver
+            // untouched, and the driver calls AHardwareBuffer_acquire() on its buffer. A
+            // null or fd-sized value is not an address; refuse it here, before the
+            // diagnostic fields are set.
+            if (!::gfxstream::ahb_import_guard::AhbImportHandleIsPlausible(
+                    reinterpret_cast<intptr_t>(diagnosticAhbInfo->buffer))) {
+                if (::gfxstream::ahb_import_guard::ShouldLogGuestBufferFailure()) {
+                    GFXSTREAM_ERROR("AHB-IMPORT-NULL guest-buffer=%p",
+                                    reinterpret_cast<void*>(diagnosticAhbInfo->buffer));
+                }
+                return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+            }
+"""
+    + GUEST_END
+)
+
 before = decoder_path.read_text(encoding="utf-8")
 existing_header = header_path.read_text(encoding="utf-8") if header_path.is_file() else None
 
@@ -252,8 +293,27 @@ if not guard_present:
 if not setup_present and "VkResult externalMemoryImportResult" in text:
     raise SystemExit(f"{decoder}: externalMemoryImportResult exists in an unexpected form")
 
+if GUEST_BEGIN in text or GUEST_END in text:
+    if text.count(GUEST_BEGIN) != 1 or text.count(GUEST_END) != 1:
+        raise SystemExit(f"{decoder}: AHB-IMPORT-NULL-GUEST markers are not paired")
+    if text.count(GUEST_GUARD) != 1:
+        raise SystemExit(
+            f"{decoder}: AHB-IMPORT-NULL-GUEST marker present but the guard is not intact")
+    guest_present = True
+else:
+    guest_present = False
+    if text.count(GUEST_IF) != 1:
+        raise SystemExit(
+            f"{decoder}: expected one diagnosticAhbInfo block, found {text.count(GUEST_IF)}")
+    guest_at = text.index(GUEST_IF)
+    guest_assign = text.find("diagnosticAhb = diagnosticAhbInfo->buffer;", guest_at)
+    guest_type = text.find("diagnosticStreamType = STREAM_HANDLE_TYPE_PLATFORM_AHB;", guest_at)
+    if guest_assign < 0 or guest_type < 0 or guest_type < guest_assign:
+        raise SystemExit(
+            f"{decoder}: diagnosticAhbInfo block does not match the expected assignments")
+
 # ---------------------------------------------------------------------------
-# Checks passed: write the helper, then the four insertions.
+# Checks passed: write the helper, then the five insertions.
 # ---------------------------------------------------------------------------
 if existing_header is None:
     header_path.write_text(HEADER, encoding="utf-8", newline="\n")
@@ -280,6 +340,10 @@ if COLOR_GUARDED not in text:
 if BUFFER_GUARDED not in text:
     text = text.replace(BUFFER_ANCHOR, BUFFER_GUARDED, 1)
     print("patched", decoder, "(AHB-IMPORT-NULL-3)")
+
+if not guest_present:
+    text = text.replace(GUEST_IF, GUEST_IF + GUEST_GUARD, 1)
+    print("patched", decoder, "(AHB-IMPORT-NULL-GUEST)")
 
 if text != before:
     decoder_path.write_text(text, encoding="utf-8", newline="\n")

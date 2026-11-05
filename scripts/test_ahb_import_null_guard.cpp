@@ -1,12 +1,14 @@
 // Decision table for the default-on AndroidHardwareBuffer import guard.
 //
-// The production branch refuses a handle that cannot be an AHardwareBuffer* before it
-// reaches VkImportAndroidHardwareBufferInfoANDROID::buffer, and records
-// VK_ERROR_INVALID_EXTERNAL_HANDLE for the caller. This test pins that contract:
+// Two production branches refuse a handle that cannot be an AHardwareBuffer* before
+// the driver sees it: the decoder's own import handle, and the guest-supplied
+// VkImportAndroidHardwareBufferInfoANDROID in the pNext chain. Both record
+// VK_ERROR_INVALID_EXTERNAL_HANDLE. This test pins that contract:
 //
-//   * 0 and fd-sized integers (1..4095) are rejected;
+//   * 0 and fd-sized integers (1..4095) are rejected at both sites;
 //   * a plausible address is stored unchanged, bit for bit;
-//   * the log gate admits exactly one caller per process;
+//   * each log gate admits exactly one caller per process;
+//   * a rejected guest buffer leaves diagnosticAhb/diagnosticStreamType untouched;
 //   * the recorded Vulkan result is the import-specific error, not OUT_OF_DEVICE_MEMORY.
 //
 // This is a host test: it includes the same header the device build includes.
@@ -37,6 +39,18 @@ VkResult importHandle(int64_t handle, uintptr_t* buffer) {
         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
     }
     *buffer = static_cast<uintptr_t>(handle);
+    return VK_SUCCESS;
+}
+
+// Mirror of the guest pNext branch: reject before either diagnostic field is set.
+VkResult importGuestBuffer(const void* buffer, const void** diagnosticAhb,
+                           uint32_t* streamType) {
+    if (!gfxstream::ahb_import_guard::AhbImportHandleIsPlausible(
+            reinterpret_cast<intptr_t>(buffer))) {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+    *diagnosticAhb = buffer;
+    *streamType = 0x03000000u;  // STREAM_HANDLE_TYPE_PLATFORM_AHB
     return VK_SUCCESS;
 }
 
@@ -80,6 +94,42 @@ int main() {
     check(importHandle(legal, &again) == VK_SUCCESS && again == buffer,
           "legal handle is stable across calls");
 
+    // Guest pNext import: a null/fd-sized buffer is refused before either diagnostic
+    // field is written; a plausible buffer keeps the original assignments.
+    const void* sentinel = reinterpret_cast<const void*>(static_cast<uintptr_t>(0x1111));
+    const void* guestAhb = sentinel;
+    uint32_t guestStreamType = 0xdeadbeefu;
+    check(importGuestBuffer(nullptr, &guestAhb, &guestStreamType) ==
+              VK_ERROR_INVALID_EXTERNAL_HANDLE,
+          "null guest buffer rejected");
+    check(guestAhb == sentinel, "null guest buffer did not touch diagnosticAhb");
+    check(guestStreamType == 0xdeadbeefu, "null guest buffer did not touch stream type");
+
+    guestAhb = nullptr;
+    guestStreamType = 0;
+    check(importGuestBuffer(reinterpret_cast<const void*>(static_cast<uintptr_t>(4095)),
+                            &guestAhb, &guestStreamType) ==
+              VK_ERROR_INVALID_EXTERNAL_HANDLE,
+          "4095 guest buffer rejected");
+    check(guestAhb == nullptr && guestStreamType == 0,
+          "rejected guest buffer did not set diagnostics");
+
+    const uintptr_t guestLegal = 0x0000007cd1e5e5e0ULL;
+    guestAhb = nullptr;
+    guestStreamType = 0;
+    check(importGuestBuffer(reinterpret_cast<const void*>(guestLegal), &guestAhb,
+                            &guestStreamType) == VK_SUCCESS,
+          "plausible guest buffer accepted");
+    check(guestAhb == reinterpret_cast<const void*>(guestLegal),
+          "guest buffer stored unchanged");
+    check(guestStreamType == 0x03000000u, "guest stream type set after acceptance");
+
+    // The guest site has its own once-per-process gate.
+    check(gfxstream::ahb_import_guard::ShouldLogGuestBufferFailure(),
+          "first guest failure logs");
+    check(!gfxstream::ahb_import_guard::ShouldLogGuestBufferFailure(),
+          "later guest failures are silent");
+
     // The gate is process-wide: many concurrent callers produce one winner, and every
     // later call stays silent.
     std::atomic<unsigned> wins{0};
@@ -97,7 +147,8 @@ int main() {
     check(wins.load() == 1, "exactly one log line wins");
     check(!gfxstream::ahb_import_guard::ShouldLogImportFailure(), "later failures are silent");
 
-    puts("PASS: 0/fd handles rejected with VK_ERROR_INVALID_EXTERNAL_HANDLE, legal "
-         "address stored unchanged, log gate single-winner and once per process");
+    puts("PASS: 0/fd handles rejected with VK_ERROR_INVALID_EXTERNAL_HANDLE at both "
+         "sites, legal addresses stored unchanged, guest diagnostics untouched on "
+         "rejection, log gates single-winner and once per process");
     return 0;
 }
