@@ -1,0 +1,105 @@
+name: build-inputgrab
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/inputgrab
+    paths:
+      - 'tools/inputgrab/**'
+      - '.github/workflows/build-inputgrab.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Host unit tests
+        run: make -C tools/inputgrab test
+
+      - name: Host binary smoke test
+        run: |
+          set -eu
+          cc -O2 -g -std=c11 -Wall -Wextra -o /tmp/inputgrab-host \
+            tools/inputgrab/inputgrab.c tools/inputgrab/inputgrab_core.c
+          /tmp/inputgrab-host --help | head -3
+          if /tmp/inputgrab-host --grab bogus; then
+            echo "expected invalid --grab to fail" >&2
+            exit 1
+          fi
+
+      - name: Fetch NDK r27c
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+          test -d "$RUNNER_TEMP/android-ndk-r27c"
+          echo "NDK=$RUNNER_TEMP/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: Cross-compile aarch64-linux-android33
+        run: |
+          set -eu
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          "$CC" --version | head -1
+          mkdir -p out
+          SRC="tools/inputgrab/inputgrab.c tools/inputgrab/inputgrab_core.c"
+          COMMON="-O2 -g -std=c11 -Wall -Wextra -fPIE"
+          mode=""
+          if "$CC" $COMMON -static-pie -o out/inputgrab $SRC; then
+            mode="static-pie"
+          elif "$CC" $COMMON -static -o out/inputgrab $SRC; then
+            mode="static"
+          else
+            "$CC" $COMMON -pie -o out/inputgrab $SRC
+            mode="pie-dynamic"
+          fi
+          echo "$mode" > out/build-mode.txt
+          echo "build mode: $mode"
+          ls -l out/inputgrab
+
+      - name: Verify ELF and imports
+        run: |
+          set -eu
+          file out/inputgrab
+          readelf -h out/inputgrab | grep -E 'Class:|Type:|Machine:'
+          file out/inputgrab | grep -q 'ARM aarch64'
+          readelf -h out/inputgrab | grep -q 'Machine:.*AArch64'
+          nm out/inputgrab | grep -qw main
+          echo "--- program interpreter ---"
+          readelf -l out/inputgrab | grep 'interpreter' || echo "none (static)"
+          echo "--- dynamic section ---"
+          readelf -d out/inputgrab 2>/dev/null | grep NEEDED || echo "none (static)"
+          echo "--- build mode ---"
+          cat out/build-mode.txt
+
+      - name: Checksums
+        run: |
+          set -eu
+          cd out
+          md5sum inputgrab | tee inputgrab.md5
+          sha256sum inputgrab
+          {
+            echo "run: $GITHUB_RUN_ID"
+            echo "sha: $GITHUB_SHA"
+            echo "mode: $(cat build-mode.txt)"
+            echo "compiler: NDK r27c aarch64-linux-android33-clang"
+          } > build-info.txt
+          cat build-info.txt
+
+      - name: Upload inputgrab-arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: inputgrab-arm64
+          path: |
+            out/inputgrab
+            out/inputgrab.md5
+            out/build-mode.txt
+            out/build-info.txt
+          if-no-files-found: error
