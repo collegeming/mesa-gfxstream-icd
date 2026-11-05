@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [diagnostic/crosvm-native-audio]
-    paths: ['.github/workflows/android-quarantine-recovery.yml', 'scripts/patch_crosvm_mapping_lease.py', 'scripts/patch_crosvm_quarantine_recovery.py', 'scripts/test_crosvm_quarantine_recovery.py', 'scripts/patch_crosvm_bar_offset_diag.py', 'scripts/test_crosvm_bar_offset_diag.py', 'scripts/patch_crosvm_vulkan_import_diag.py', 'scripts/test_crosvm_vulkan_import_diag.py', 'scripts/patch_crosvm_vulkano_gralloc_gate.py', 'scripts/test_crosvm_vulkano_gralloc_gate.py']
+    paths: ['.github/workflows/android-quarantine-recovery.yml', 'scripts/patch_crosvm_mapping_lease.py', 'scripts/patch_crosvm_quarantine_recovery.py', 'scripts/test_crosvm_quarantine_recovery.py', 'scripts/patch_crosvm_bar_offset_diag.py', 'scripts/test_crosvm_bar_offset_diag.py', 'scripts/patch_crosvm_vulkan_import_diag.py', 'scripts/test_crosvm_vulkan_import_diag.py', 'scripts/patch_crosvm_vulkano_gralloc_gate.py', 'scripts/test_crosvm_vulkano_gralloc_gate.py', 'scripts/patch_crosvm_allow_fixed_blob_vulkano.py', 'scripts/test_crosvm_allow_fixed_blob_vulkano.py']
 permissions:
   contents: read
   actions: read
@@ -514,6 +514,7 @@ jobs:
           cp trace-patches/scripts/patch_crosvm_bar_offset_diag.py trace-patches/scripts/test_crosvm_bar_offset_diag.py evidence/
           cp trace-patches/scripts/patch_crosvm_vulkan_import_diag.py trace-patches/scripts/test_crosvm_vulkan_import_diag.py evidence/
           cp trace-patches/scripts/patch_crosvm_vulkano_gralloc_gate.py trace-patches/scripts/test_crosvm_vulkano_gralloc_gate.py evidence/
+          cp trace-patches/scripts/patch_crosvm_allow_fixed_blob_vulkano.py trace-patches/scripts/test_crosvm_allow_fixed_blob_vulkano.py evidence/
           python3 -I trace-patches/scripts/patch_crosvm_mapping_lease.py "$GITHUB_WORKSPACE/source" | tee evidence/map-lease-patched-sha256.txt
           python3 -I trace-patches/scripts/patch_crosvm_quarantine_recovery.py "$GITHUB_WORKSPACE/source"
           python3 -I trace-patches/scripts/test_crosvm_quarantine_recovery.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
@@ -523,6 +524,8 @@ jobs:
           python3 -I trace-patches/scripts/test_crosvm_vulkan_import_diag.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence" "$GITHUB_WORKSPACE/trace-patches/.github/workflows/android-quarantine-recovery.yml"
           python3 -I trace-patches/scripts/patch_crosvm_vulkano_gralloc_gate.py "$GITHUB_WORKSPACE/source"
           python3 -I trace-patches/scripts/test_crosvm_vulkano_gralloc_gate.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
+          python3 -I trace-patches/scripts/patch_crosvm_allow_fixed_blob_vulkano.py "$GITHUB_WORKSPACE/source"
+          python3 -I trace-patches/scripts/test_crosvm_allow_fixed_blob_vulkano.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
           python3 -I - <<'PY'
           import difflib
           from pathlib import Path
@@ -548,6 +551,15 @@ jobs:
           assert linux_src.count('RutabagaGrallocBackendFlags::new().disable_vulkano()') == 1
           vmc = Path('source/vm_control/src/lib.rs').read_text()
           assert vmc.count('CIB1-DIAG-CROSVM-MAPREGION') == 3
+          gpu_src = Path('source/src/crosvm/sys/linux/gpu.rs').read_text()
+          assert gpu_src.count('CROSVM_ALLOW_FIXED_BLOB_WITH_VULKANO') == 2
+          assert gpu_src.count('env::var_os("CROSVM_ALLOW_FIXED_BLOB_WITH_VULKANO").is_some()') == 1
+          assert gpu_src.count('debug!("gpu fixed blob mapping disabled: not compatible with vulkano")') == 0
+          assert gpu_src.count('warn!("gpu fixed blob mapping disabled: not compatible with vulkano")') == 1
+          assert gpu_src.count('debug!("gpu fixed blob mapping disabled: not compatible with passthrough GPU.') == 1
+          assert gpu_src.count('gpu_params.fixed_blob_mapping = false;') == 2
+          assert vmc.count('CROSVM_CIB_FAIL_CLOSED') == 2
+          assert vmc.count('Some(VmMemoryResponse::Err(SysError::new(libc::ENOSPC)))') == 1
           PY
           git -C source diff --check
           cd source
@@ -610,7 +622,7 @@ jobs:
           for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
           printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
           printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt
-          sha256sum evidence/patch_crosvm_mapping_lease.py evidence/patch_crosvm_quarantine_recovery.py evidence/test_crosvm_quarantine_recovery.py evidence/patch_crosvm_bar_offset_diag.py evidence/test_crosvm_bar_offset_diag.py evidence/patch_crosvm_vulkan_import_diag.py evidence/test_crosvm_vulkan_import_diag.py evidence/patch_crosvm_vulkano_gralloc_gate.py evidence/test_crosvm_vulkano_gralloc_gate.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/map-lease-provenance.sha256
+          sha256sum evidence/patch_crosvm_mapping_lease.py evidence/patch_crosvm_quarantine_recovery.py evidence/test_crosvm_quarantine_recovery.py evidence/patch_crosvm_bar_offset_diag.py evidence/test_crosvm_bar_offset_diag.py evidence/patch_crosvm_vulkan_import_diag.py evidence/test_crosvm_vulkan_import_diag.py evidence/patch_crosvm_vulkano_gralloc_gate.py evidence/test_crosvm_vulkano_gralloc_gate.py evidence/patch_crosvm_allow_fixed_blob_vulkano.py evidence/test_crosvm_allow_fixed_blob_vulkano.py evidence/crosvm-gpu-create-trace.patch evidence/source.patch evidence/gpu-create-trace-provenance.txt > evidence/map-lease-provenance.sha256
           test ! -f evidence/crosvm || "$TC/bin/llvm-readelf" --dyn-syms --wide evidence/crosvm > evidence/crosvm-dynamic-symbols.txt
           test ! -f evidence/crosvm || grep -a -c 'AAudio_createStreamBuilder' evidence/crosvm > evidence/aaudio-symbol-count.txt || true
           test ! -f evidence/crosvm || grep -a -c 'virtio-snd' evidence/crosvm > evidence/virtio-snd-string-count.txt || true
@@ -687,6 +699,8 @@ jobs:
           python3 -I pair-patches/scripts/patch_crosvm_native_detach.py "$GITHUB_WORKSPACE/source"
           python3 -I pair-patches/scripts/patch_crosvm_native_lease.py "$GITHUB_WORKSPACE/source"
           python3 -I trace-patches/scripts/patch_crosvm_mapping_lease.py "$GITHUB_WORKSPACE/source"
+          python3 -I trace-patches/scripts/patch_crosvm_allow_fixed_blob_vulkano.py "$GITHUB_WORKSPACE/source"
+          python3 -I trace-patches/scripts/test_crosvm_allow_fixed_blob_vulkano.py "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/evidence"
           git -C source diff --check
       - name: Run blob mapping lifetime tests on the host
         working-directory: ${{ github.workspace }}/source
