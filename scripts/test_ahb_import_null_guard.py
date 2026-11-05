@@ -13,8 +13,11 @@ Checks, in this order:
      generic unsupported-type error;
    * OpaqueFd and DmaBuf still read getFd() and never cast a handle to a pointer; the
      pinned AHB assignment line is unchanged.
+1b. Guest-supplied pNext import:
+   * a null/fd-sized buffer is refused before diagnosticAhb and diagnosticStreamType
+     are set, with a separate once-per-process AHB-IMPORT-NULL guest-buffer line.
 2. host/vulkan/ahb_import_guard.h: the one comparison, the 4096 threshold and the
-   atomic once-per-process gate.
+   two atomic once-per-process gates.
 3. Workflow wiring: paths filter, helper intent-to-add, artifact copies, and the
    patch -> Python test -> C++ test order.
 
@@ -91,14 +94,41 @@ for marker, kind in (("AHB-IMPORT-NULL-2", "ColorBuffer"), ("AHB-IMPORT-NULL-3",
         "return VK_ERROR_OUT_OF_DEVICE_MEMORY;")
 
 # ---------------------------------------------------------------------------
+# 1b. Guest-supplied pNext AHB import: refused before the diagnostic fields are
+#     set, so the driver never sees a null/non-address buffer from this path.
+# ---------------------------------------------------------------------------
+assert decoder.count("AHB-IMPORT-NULL guest-buffer=%p") == 1
+assert decoder.count("AHB-IMPORT-NULL-GUEST-BEGIN") == 1
+assert decoder.count("AHB-IMPORT-NULL-GUEST-END") == 1
+guest_at = decoder.index("if (diagnosticAhbInfo) {")
+guest_begin = decoder.index("AHB-IMPORT-NULL-GUEST-BEGIN")
+guest_end = decoder.index("AHB-IMPORT-NULL-GUEST-END")
+guest_assign = decoder.index("diagnosticAhb = diagnosticAhbInfo->buffer;", guest_at)
+guest_type = decoder.index("diagnosticStreamType = STREAM_HANDLE_TYPE_PLATFORM_AHB;", guest_at)
+assert guest_at < guest_begin < guest_end < guest_assign < guest_type, (
+    "the guest guard must reject before diagnosticAhb/diagnosticStreamType are set")
+guest_guard = decoder[guest_begin:guest_end]
+assert "AhbImportHandleIsPlausible(" in guest_guard
+assert "reinterpret_cast<intptr_t>(diagnosticAhbInfo->buffer)" in guest_guard
+assert "ShouldLogGuestBufferFailure()" in guest_guard
+assert 'GFXSTREAM_ERROR("AHB-IMPORT-NULL guest-buffer=%p"' in guest_guard
+assert "return VK_ERROR_INVALID_EXTERNAL_HANDLE;" in guest_guard
+assert "diagnosticAhb =" not in guest_guard
+assert "diagnosticStreamType =" not in guest_guard
+
+# The v1 handle guard stays as defense in depth.
+assert "AHB-IMPORT-NULL-1-BEGIN" in decoder and "AHB-IMPORT-NULL-1-END" in decoder
+
+# ---------------------------------------------------------------------------
 # 2. Helper header.
 # ---------------------------------------------------------------------------
 assert header.count("constexpr uint64_t kMinPlausibleAhbAddress = 4096;") == 1
 assert header.count("return static_cast<uint64_t>(handle) >= kMinPlausibleAhbAddress;") == 1
 assert header.count("inline bool ShouldLogImportFailure()") == 1
-assert header.count("std::atomic<unsigned> sLogged{0};") == 1
-assert "fetch_add(1, std::memory_order_relaxed) == 0" in header
-# The guard is one comparison: no second range check on the handle.
+assert header.count("inline bool ShouldLogGuestBufferFailure()") == 1
+assert header.count("std::atomic<unsigned> sLogged{0};") == 2
+assert header.count("fetch_add(1, std::memory_order_relaxed) == 0") == 2
+# Each guard is one comparison: no second range check on the handle.
 assert "handle <" not in header and "handle >" not in header
 
 # ---------------------------------------------------------------------------
