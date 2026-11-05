@@ -1,6 +1,15 @@
 /*
  * ahb_shim.c - LD_PRELOAD diagnostic shim for AHardwareBuffer_acquire/release.
  *
+ * v3: a NULL argument is still dropped (libnativewindow dereferences NULL in
+ *     incStrong/decStrong), but the first 8 NULL events per process now log the
+ *     caller line *plus* up to AHB_SHIM_FRAMES backtrace frames, each resolved
+ *     with dladdr() as "module=/path+0xoffset".  Later NULL events log a single
+ *     "suppressed=N" line so a repeating driver bug cannot flood the log.
+ *     Frames are collected with _Unwind_Backtrace (eh_frame based), which also
+ *     walks vendor modules such as libGLES_mali.so when they carry unwind info.
+ *     If no frame can be resolved, only the v2 caller line is printed.
+ *
  * v2: a NULL release is logged (rate limited) and dropped.  libnativewindow's
  *     release tail-calls RefBase::decStrong() without a NULL check either, so
  *     forwarding NULL faults exactly like the v1 acquire case did.
@@ -12,18 +21,20 @@
  *   module=/vendor/lib64/egl/libGLES_mali.so+0x128b3cc
  * three times, so the caller is the Mali driver.
  *
- * Build (NDK r27c, same as build-host.yml):
- *   aarch64-linux-android33-clang -shared -fPIC -O2 -Wall -Wextra -Werror \
- *       -ldl scripts/ahb_shim.c -o libahb_shim.so
+ * Build (NDK r27c, as in .github/workflows/build-ahb-shim.yml): compile with
+ * -fno-omit-frame-pointer -funwind-tables and link the NDK static
+ * lib/clang/<ver>/lib/linux/aarch64/libunwind.a for _Unwind_Backtrace.
  *
  * Env:
  *   AHB_SHIM_LOG=/path             append log to /path (default: stderr)
+ *   AHB_SHIM_FRAMES=N              0..16 frames per NULL backtrace (default: 16)
  *   AHB_SHIM_TRACE_RELEASE=1       also log every non-NULL release (default: off)
  *
  * Rules honoured on both NULL paths: no malloc, no stdio stream, no lock of our
- * own.  They use __builtin_return_address(0), dladdr(), snprintf() into a stack
- * buffer and write(2).  The real symbol is resolved with dlsym(RTLD_NEXT) only
- * when it is about to be called, i.e. never on a NULL path.
+ * own.  They use __builtin_return_address(0), _Unwind_Backtrace(), dladdr(),
+ * snprintf() into stack buffers and write(2).  The real symbol is resolved with
+ * dlsym(RTLD_NEXT) only when it is about to be called, i.e. never on a NULL
+ * path; the NULL path never reaches it.
  */
 #define _GNU_SOURCE
 
@@ -36,21 +47,36 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <unwind.h>
 
 typedef void AHardwareBuffer;
 
 typedef void (*AhbFn)(AHardwareBuffer *);
 
 #define AHB_SHIM_LINE_MAX 512U
-/* A NULL release can repeat every frame; keep the first few lines only. */
-#define AHB_SHIM_RELEASE_NULL_MAX 8U
+/* Whole multi-line block (caller + up to 16 frames) is built on the stack. */
+#define AHB_SHIM_BLOCK_MAX 12288U
+#define AHB_SHIM_FRAMES_DEFAULT 16U
+#define AHB_SHIM_FRAMES_MAX 16U
+/* Full backtraces per process; later NULL events keep one summary line. */
+#define AHB_SHIM_TRACE_MAX 8U
 
 static int g_log_fd = STDERR_FILENO;
 static int g_trace_release = 0;
 static int g_resolve_warned = 0;
+static unsigned g_frames = AHB_SHIM_FRAMES_DEFAULT;
+static uintptr_t g_self_base = 0;
+static unsigned g_acquire_null_seen = 0;
 static unsigned g_release_null_seen = 0;
 static AhbFn g_real_acquire = NULL;
 static AhbFn g_real_release = NULL;
+
+struct shim_bt {
+    uintptr_t pc[AHB_SHIM_FRAMES_MAX];
+    unsigned count;
+    unsigned max;
+    uintptr_t self_base;
+};
 
 static void shim_emit(const char *buf, int n)
 {
@@ -61,9 +87,6 @@ static void shim_emit(const char *buf, int n)
         return;
     }
     len = (size_t)n;
-    if (len >= AHB_SHIM_LINE_MAX) {
-        len = AHB_SHIM_LINE_MAX - 1;
-    }
     while (off < len) {
         ssize_t w = write(g_log_fd, buf + off, len - off);
         if (w > 0) {
@@ -76,21 +99,77 @@ static void shim_emit(const char *buf, int n)
     }
 }
 
+/* Track how much of a stack block snprintf() actually used.  A truncated
+ * snprintf() still returns the would-be length, so clamp to the buffer end. */
+static size_t shim_append(char *buf, size_t cap, size_t off, int n)
+{
+    size_t add;
+
+    if (n <= 0 || off >= cap) {
+        return off;
+    }
+    add = (size_t)n;
+    if (add >= cap - off) {
+        return cap - 1;
+    }
+    return off + add;
+}
+
 static int shim_tid(void)
 {
     return (int)syscall(SYS_gettid);
 }
 
+static _Unwind_Reason_Code shim_bt_cb(struct _Unwind_Context *ctx, void *arg)
+{
+    struct shim_bt *bt = (struct shim_bt *)arg;
+    uintptr_t pc = (uintptr_t)_Unwind_GetIP(ctx);
+    Dl_info info;
+
+    if (pc == 0) {
+        return _URC_NO_REASON;
+    }
+
+    /* Drop the shim's own frames (acquire -> logger -> _Unwind_Backtrace) so
+     * frame #00 is the first real caller, i.e. the Mali call site. */
+    if (bt->self_base != 0 && dladdr((void *)pc, &info) != 0 &&
+        (uintptr_t)info.dli_fbase == bt->self_base) {
+        return _URC_NO_REASON;
+    }
+
+    if (bt->count < bt->max) {
+        bt->pc[bt->count++] = pc;
+    }
+    if (bt->count >= bt->max) {
+        return _URC_END_OF_STACK;
+    }
+    return _URC_NO_REASON;
+}
+
 /* caller is passed in so that -O2 inlining can never skew
  * __builtin_return_address(0).  kind is "acquire-null" or "release-null". */
 static void __attribute__((noinline))
-shim_log_null(void *caller, const char *kind)
+shim_log_null(void *caller, const char *kind, unsigned *seen)
 {
     Dl_info info;
     const char *module = "?";
     unsigned long offset = 0;
-    char line[AHB_SHIM_LINE_MAX];
+    struct shim_bt bt;
+    unsigned index;
+    unsigned printed = 0;
+    unsigned i;
+    char block[AHB_SHIM_BLOCK_MAX];
+    size_t off = 0;
     int n;
+
+    index = __atomic_fetch_add(seen, 1, __ATOMIC_RELAXED);
+    if (index >= AHB_SHIM_TRACE_MAX) {
+        n = snprintf(block, sizeof(block),
+                     "AHB-SHIM %s suppressed=%u tid=%d\n",
+                     kind, index + 1 - AHB_SHIM_TRACE_MAX, shim_tid());
+        shim_emit(block, n);
+        return;
+    }
 
     if (dladdr(caller, &info) != 0) {
         if (info.dli_fname != NULL && info.dli_fname[0] != '\0') {
@@ -102,26 +181,58 @@ shim_log_null(void *caller, const char *kind)
         }
     }
 
-    n = snprintf(line, sizeof(line),
+    n = snprintf(block, sizeof(block),
                  "AHB-SHIM %s caller=%p module=%s+0x%lx tid=%d\n",
                  kind, caller, module, offset, shim_tid());
-    shim_emit(line, n);
+    off = shim_append(block, sizeof(block), 0, n);
+
+    bt.count = 0;
+    bt.max = g_frames;
+    bt.self_base = g_self_base;
+    if (bt.max > 0) {
+        (void)_Unwind_Backtrace(shim_bt_cb, &bt);
+    }
+
+    for (i = 0; i < bt.count && off + 1 < sizeof(block); i++) {
+        Dl_info frame_info;
+        const char *frame_module;
+        unsigned long frame_offset = 0;
+
+        /* A frame that dladdr() cannot place is skipped; if that leaves no
+         * frames at all the block keeps just the caller line above. */
+        if (dladdr((void *)bt.pc[i], &frame_info) == 0) {
+            continue;
+        }
+        if (frame_info.dli_fname == NULL || frame_info.dli_fname[0] == '\0') {
+            continue;
+        }
+        frame_module = frame_info.dli_fname;
+        if (frame_info.dli_fbase != NULL) {
+            frame_offset = (unsigned long)(bt.pc[i] -
+                                           (uintptr_t)frame_info.dli_fbase);
+        }
+        n = snprintf(block + off, sizeof(block) - off,
+                     "#%02u pc=0x%lx module=%s+0x%lx\n",
+                     printed, (unsigned long)bt.pc[i], frame_module,
+                     frame_offset);
+        if (n <= 0) {
+            break;
+        }
+        off = shim_append(block, sizeof(block), off, n);
+        printed++;
+    }
+
+    shim_emit(block, (int)off);
 }
 
 static void __attribute__((noinline)) shim_log_acquire_null(void *caller)
 {
-    shim_log_null(caller, "acquire-null");
+    shim_log_null(caller, "acquire-null", &g_acquire_null_seen);
 }
 
 static void __attribute__((noinline)) shim_log_release_null(void *caller)
 {
-    unsigned seen = __atomic_fetch_add(&g_release_null_seen, 1,
-                                       __ATOMIC_RELAXED);
-
-    if (seen >= AHB_SHIM_RELEASE_NULL_MAX) {
-        return;
-    }
-    shim_log_null(caller, "release-null");
+    shim_log_null(caller, "release-null", &g_release_null_seen);
 }
 
 static void shim_log_release(AHardwareBuffer *buffer)
@@ -193,15 +304,39 @@ void AHardwareBuffer_release(AHardwareBuffer *buffer)
     g_real_release(buffer);
 }
 
+static unsigned shim_parse_frames(const char *value)
+{
+    unsigned frames = 0;
+    const char *p = value;
+
+    if (p == NULL || *p < '0' || *p > '9') {
+        return AHB_SHIM_FRAMES_DEFAULT;
+    }
+    while (*p >= '0' && *p <= '9') {
+        frames = frames * 10 + (unsigned)(*p - '0');
+        if (frames > AHB_SHIM_FRAMES_MAX) {
+            return AHB_SHIM_FRAMES_MAX;
+        }
+        p++;
+    }
+    return frames;
+}
+
 __attribute__((constructor)) static void shim_ctor(void)
 {
     const char *path = getenv("AHB_SHIM_LOG");
     const char *trace = getenv("AHB_SHIM_TRACE_RELEASE");
+    const char *frames = getenv("AHB_SHIM_FRAMES");
+    Dl_info self;
     char line[AHB_SHIM_LINE_MAX];
     int n;
 
     if (trace != NULL && trace[0] == '1' && trace[1] == '\0') {
         g_trace_release = 1;
+    }
+    g_frames = shim_parse_frames(frames);
+    if (dladdr((void *)&shim_emit, &self) != 0 && self.dli_fbase != NULL) {
+        g_self_base = (uintptr_t)self.dli_fbase;
     }
     if (path != NULL && path[0] != '\0') {
         int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
@@ -211,10 +346,11 @@ __attribute__((constructor)) static void shim_ctor(void)
     }
 
     /* One banner line so a run without any NULL event can still be told apart
-     * from "LD_PRELOAD never reached this process"; shim=v2 identifies the
+     * from "LD_PRELOAD never reached this process"; shim=v3 identifies the
      * build when the same path is overwritten on device. */
     n = snprintf(line, sizeof(line),
-                 "AHB-SHIM loaded pid=%d trace_release=%d log_fd=%d shim=v2\n",
-                 (int)getpid(), g_trace_release, g_log_fd);
+                 "AHB-SHIM loaded pid=%d trace_release=%d log_fd=%d "
+                 "frames=%u shim=v3\n",
+                 (int)getpid(), g_trace_release, g_log_fd, g_frames);
     shim_emit(line, n);
 }

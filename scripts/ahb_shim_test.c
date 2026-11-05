@@ -8,7 +8,8 @@
  *      -L. -lahb_stub -Wl,-rpath,'$ORIGIN'
  *   LD_PRELOAD=./libahb_shim_host.so ./ahb_shim_test <case>
  *
- * cases: null-release, null-release-many, null-acquire, non-null
+ * cases: null-release, null-release-many, null-acquire, null-acquire-many,
+ *        non-null.  AHB_SHIM_FRAMES is read by the shim under test.
  *
  * The fake real implementation lives in a separate DSO on purpose:
  * dlsym(RTLD_NEXT) from the preloaded shim only searches objects after the
@@ -66,6 +67,10 @@ int main(int argc, char **argv)
         }
     } else if (strcmp(name, "null-acquire") == 0) {
         AHardwareBuffer_acquire(NULL);
+    } else if (strcmp(name, "null-acquire-many") == 0) {
+        for (i = 0; i < 30; i++) {
+            AHardwareBuffer_acquire(NULL);
+        }
     } else if (strcmp(name, "non-null") == 0) {
         AHardwareBuffer_acquire(fake_ahb);
         AHardwareBuffer_release(fake_ahb);
