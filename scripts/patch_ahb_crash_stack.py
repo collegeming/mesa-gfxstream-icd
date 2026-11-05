@@ -153,11 +153,8 @@ IMPORT_CB_OLD = """                importAhbInfo.buffer = ahb;
                 vk_append_struct(&allocInfoChain, &importAhbInfo);
 """
 IMPORT_CB_NEW = """                // AHB-CRASH-TRACE-IMPORT-CB-BEGIN
-                if (!ahb) {
-                    GFXSTREAM_AHB_TRACE("AHB-LIFE cb-import skip-null", nullptr,
-                                        allocInfo.memoryTypeIndex);
-                    break;
-                }
+                // ahb was rejected above if null; this crumb still carries the value in
+                // ptr=, so an unexpected null shows up as ptr=0x0 in the ring.
                 GFXSTREAM_AHB_TRACE("AHB-LIFE cb-import", ahb, allocInfo.memoryTypeIndex);
                 // AHB-CRASH-TRACE-IMPORT-CB-END
                 importAhbInfo.buffer = ahb;
