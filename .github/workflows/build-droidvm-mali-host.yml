@@ -12,7 +12,7 @@ on:
           - no_hostptr
         default: full
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag, diagnostic/ahb-first-hostvisible, diagnostic/ahb-export-guard]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag, diagnostic/ahb-first-hostvisible, diagnostic/ahb-export-guard, diagnostic/image-modifier-fallback]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -50,6 +50,7 @@ on:
       - 'scripts/*ahb_import_null_guard*'
       - 'scripts/*ahb_export_guard*'
       - 'scripts/*ahb_blob_export_guard*'
+      - 'scripts/*image_modifier_fallback*'
       - 'scripts/*ahb_alloc_killswitch*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
@@ -391,6 +392,14 @@ jobs:
             -I"$GITHUB_WORKSPACE/vulkan-headers/include" \
             ci/scripts/test_ahb_blob_export_guard.cpp -o "$RUNNER_TEMP/test-ahb-blob-export-guard"
           "$RUNNER_TEMP/test-ahb-blob-export-guard" | tee out/ahb-blob-export-guard-unit-tests.txt
+          python3 -I ci/scripts/patch_image_modifier_fallback.py source
+          git -C source add -N host/vulkan/image_modifier_fallback.h
+          python3 -I ci/scripts/test_image_modifier_fallback.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/image-modifier-fallback-tests.txt
+          c++ -std=c++17 -Wall -Wextra -Werror -pthread \
+            -I"$GITHUB_WORKSPACE/source/host/vulkan" \
+            -I"$GITHUB_WORKSPACE/vulkan-headers/include" \
+            ci/scripts/test_image_modifier_fallback.cpp -o "$RUNNER_TEMP/test-image-modifier-fallback"
+          "$RUNNER_TEMP/test-image-modifier-fallback" | tee out/image-modifier-fallback-unit-tests.txt
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
@@ -418,6 +427,8 @@ jobs:
           cp source/host/vulkan/ahb_import_guard.h out/
           cp source/host/vulkan/ahb_export_guard.h out/
           cp source/host/vulkan/ahb_blob_export_guard.h out/
+          cp source/host/vulkan/image_modifier_fallback.h out/
+          cp ci/scripts/*image_modifier_fallback* out/
           cp ci/scripts/*ahb_alloc_killswitch* out/
           cp source/host/vulkan/ahb_alloc_off_file.h out/
           cp ci/scripts/*render_staging_coherent* out/
