@@ -12,7 +12,7 @@ on:
           - no_hostptr
         default: full
   push:
-    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag, diagnostic/ahb-first-hostvisible]
+    branches: [diagnostic/droidvm-mali-host, diagnostic/coherent-contract-v1, diagnostic/coherent-contract-impl, diagnostic/native-backing-lease, diagnostic/native-roundtrip-trace, diagnostic/native-cpu-crossview, diagnostic/native-cpu-reverse, diagnostic/native-cpu-prefault, diagnostic/native-cpu-prewrite, diagnostic/niri-image-external-types, diagnostic/niri-image-query-trace, diagnostic/niri-classic-image-bridge, diagnostic/niri-cib-readiness, diagnostic/niri-cib-buffer-trace, diagnostic/niri-cib-ahb-buffer-fix, diagnostic/ring-park-diag, diagnostic/ahb-first-hostvisible, diagnostic/ahb-crash-stack]
     paths:
       - '.github/workflows/build-droidvm-mali-host.yml'
       - 'scripts/patch_droidvm_build.py'
@@ -48,6 +48,7 @@ on:
       - 'scripts/*completion_fence_liveness*'
       - 'scripts/*ahb_null_guard*'
       - 'scripts/*ahb_alloc_killswitch*'
+      - 'scripts/*ahb_crash_stack*'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'
@@ -364,6 +365,15 @@ jobs:
             -I"$GITHUB_WORKSPACE/source/host/vulkan" \
             ci/scripts/test_ahb_alloc_killswitch_file.cpp -o "$RUNNER_TEMP/test-ahb-alloc-killswitch-file"
           "$RUNNER_TEMP/test-ahb-alloc-killswitch-file" | tee out/ahb-alloc-killswitch-file-tests.txt
+          python3 -I ci/scripts/patch_ahb_crash_stack.py source
+          python3 -I ci/scripts/test_ahb_crash_stack.py source ci/.github/workflows/build-droidvm-mali-host.yml | tee out/ahb-crash-stack-tests.txt
+          c++ -std=c++17 -pthread -Wall -Wextra -Werror -fno-omit-frame-pointer \
+            -I source/host/vulkan \
+            ci/scripts/test_ahb_crash_stack.cpp -o "$RUNNER_TEMP/test-ahb-crash-stack"
+          "$RUNNER_TEMP/test-ahb-crash-stack" | tee out/ahb-crash-stack-unit-tests.txt
+          cp ci/scripts/patch_ahb_crash_stack.py ci/scripts/test_ahb_crash_stack.py ci/scripts/test_ahb_crash_stack.cpp out/
+          cp source/host/vulkan/ahb_crash_trace.h out/
+          git -C source add -N host/vulkan/ahb_crash_trace.h
           cp ci/scripts/patch_unhide_drm_format_modifier.py ci/scripts/patch_allow_guest_import_coherent.py ci/scripts/patch_guest_handle_without_external_blob.py ci/scripts/patch_cib_color_dump.py ci/scripts/patch_cib_fdscan.py ci/scripts/patch_copy_diag.py ci/scripts/patch_import_fd_dump.py ci/scripts/patch_host_extension_enable.py out/
           if [ "$HP_MODE" = "systemblob_only" ]; then
             cp ci/scripts/patch_systemblob_host_pointer_type.py out/
