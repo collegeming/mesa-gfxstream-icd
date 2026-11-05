@@ -306,13 +306,16 @@ jobs:
           #define ATRACE_ASYNC_BEGIN(name, cookie) ((void)0)
           #define ATRACE_ASYNC_END(name, cookie) ((void)0)
           EOF
-          # The AIDL NDK backend ships in the runner's build-tools; download it only if absent.
-          AIDL=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -maxdepth 2 -name aidl -type f 2>/dev/null | sort | tail -1 || true)
-          if [ -z "$AIDL" ]; then
-            curl --fail --location --retry 3 -o "$CL/build-tools.zip" https://dl.google.com/android/repository/build-tools_r35_linux.zip
-            unzip -q "$CL/build-tools.zip" -d "$CL/build-tools"
-            AIDL=$(find "$CL/build-tools" -name aidl -type f | head -1)
+          # The NDK backend of the runner's newest aidl emits calls newer than NDK r27c's
+          # libbinder_ndk headers. Pin build-tools r35, whose generated code matches r27c.
+          if [ ! -f downloads/build-tools_r35_linux.zip ]; then
+            curl --fail --location --retry 3 -o downloads/build-tools_r35_linux.zip https://dl.google.com/android/repository/build-tools_r35_linux.zip
           fi
+          unzip -q -o downloads/build-tools_r35_linux.zip -d "$CL/build-tools"
+          AIDL=$(find "$CL/build-tools" -name aidl -type f | head -1)
+          test -n "$AIDL"
+          AIDL_VERSION=$("$AIDL" --version 2>&1 || true)
+          printf '%s\n' "$AIDL_VERSION" | grep -q 'platform SDK version 35'
           "$AIDL" --lang=ndk -I "$CL/aidl" -o "$CL/aidl-out" --header_out="$CL/aidl-hdr" \
             "$CL/aidl/android/crosvm/ICrosvmAndroidDisplayService.aidl" "$CL/aidl/android/crosvm/DisplayConfig.aidl"
           CXX="$TC/bin/aarch64-linux-android35-clang++"
