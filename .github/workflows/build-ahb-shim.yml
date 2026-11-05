@@ -1,0 +1,70 @@
+name: build-ahb-shim
+
+# Builds scripts/ahb_shim.c as an arm64-v8a LD_PRELOAD shim that intercepts
+# AHardwareBuffer_acquire/release.  A NULL acquire is logged with the caller
+# module+offset and returns instead of faulting in RefBase::incStrong.
+# Diagnostic only; no gfxstream sources are involved.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - diagnostic/ahb-acquire-shim
+
+permissions:
+  contents: read
+
+jobs:
+  build-ahb-shim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout mesa-gfxstream-icd
+        uses: actions/checkout@v4
+
+      - name: Fetch Android NDK r27c
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$HOME"
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r27c" >> "$GITHUB_ENV"
+          echo "NDK_BIN=$HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_ENV"
+
+      - name: Build libahb_shim.so (arm64-v8a, android-33)
+        run: |
+          set -euo pipefail
+          "$NDK_BIN/aarch64-linux-android33-clang" \
+            -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -ldl scripts/ahb_shim.c -o libahb_shim.so
+          ls -l libahb_shim.so
+          file libahb_shim.so
+
+      - name: Verify exported symbols and dynamic deps
+        run: |
+          set -euo pipefail
+          echo "== nm -D --defined-only libahb_shim.so (NDK llvm-nm) =="
+          "$NDK_BIN/llvm-nm" -D --defined-only libahb_shim.so | tee dynsyms.txt
+          for sym in AHardwareBuffer_acquire AHardwareBuffer_release; do
+            if ! grep -Eq "[[:space:]]T[[:space:]]+${sym}$" dynsyms.txt; then
+              echo "::error::missing exported symbol ${sym}"
+              exit 1
+            fi
+          done
+          echo "both AHardwareBuffer_ symbols exported"
+          echo "== readelf -d libahb_shim.so (NDK llvm-readelf) =="
+          "$NDK_BIN/llvm-readelf" -d libahb_shim.so | tee dynsec.txt
+          echo "== NEEDED =="
+          grep -E 'NEEDED' dynsec.txt
+          if grep -E 'NEEDED.*libnativewindow' dynsec.txt; then
+            echo "::error::shim must not depend on libnativewindow"
+            exit 1
+          fi
+          echo "no libnativewindow dependency (real symbol is resolved via dlsym)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ahb-shim-arm64
+          path: libahb_shim.so
+          if-no-files-found: error
+          retention-days: 30
