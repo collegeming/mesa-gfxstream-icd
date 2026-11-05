@@ -220,6 +220,174 @@ jobs:
           "$TC/bin/llvm-nm" -g --defined-only native-libs/libvnc_server_bridge.a > evidence/vnc-bridge-symbols.txt
           "$TC/bin/llvm-readelf" -d native-libs/libvncserver.so > evidence/libvncserver-elf.txt
           sha256sum native-libs/libvncserver.so native-libs/libvnc_server_bridge.a | tee evidence/vnc-native-checksums.txt
+      - name: Build the DroidVM Android display client for android_display
+        shell: bash
+        run: |
+          set -euo pipefail
+          # gpu_display's android_display backend calls the libcrosvm_android_display_client ABI.
+          # Cargo has no rule for it, so compile the pinned DroidVM/AOSP client and its NDK AIDL
+          # glue here, then link the archive into crosvm.
+          CLIENT_SHA=862c6af544ce4ca89e5dc8f1aca10a832367d77f
+          FWN_SHA=c44a9120035161a7297f0be722f991f8995d522b
+          FWB_SHA=41aed9f8e0aea35a5b4cda5e2575eee6f2cc9238
+          SYSCORE_SHA=322ff5129d865a5e8d958667e6c63ac943449493
+          LIBBASE_SHA=7e57da991ea477f247e5a714f3a83e8af8341791
+          CL="$GITHUB_WORKSPACE/native-display-client"
+          rm -rf "$CL"
+          mkdir -p "$CL/src" "$CL/aidl/android/view" "$CL/aidl/android/os" "$CL/aidl/android/crosvm" \
+            "$CL/include/system" "$CL/include/vndk" "$CL/include/apex" "$CL/include/nativebase" \
+            "$CL/include/cutils" "$CL/include/android" "$CL/include/android-base" \
+            "$CL/obj" "$CL/aidl-out" "$CL/aidl-hdr" "$CL/linkstubs"
+          raw="https://raw.githubusercontent.com"
+          fetch() { curl --fail --location --retry 3 --silent --show-error "$1" -o "$2"; }
+          for f in crosvm_android_display_client.cpp media_codec_dl.cpp media_codec_dl.h \
+                   media_codec_abi.h surface_control_dl.cpp surface_control_dl.h surface_control_abi.h; do
+            fetch "$raw/Droid-VM/Virtualization/$CLIENT_SHA/libs/android_display_backend/$f" "$CL/src/$f"
+          done
+          fetch "$raw/Droid-VM/Virtualization/$CLIENT_SHA/libs/android_display_backend/aidl/android/crosvm/ICrosvmAndroidDisplayService.aidl" "$CL/aidl/android/crosvm/ICrosvmAndroidDisplayService.aidl"
+          fetch "$raw/Droid-VM/Virtualization/$CLIENT_SHA/libs/android_display_backend/aidl/android/crosvm/DisplayConfig.aidl" "$CL/aidl/android/crosvm/DisplayConfig.aidl"
+          fetch "$raw/GrapheneOS/platform_frameworks_native/$FWN_SHA/aidl/gui/android/view/Surface.aidl" "$CL/aidl/android/view/Surface.aidl"
+          fetch "$raw/phhusson/platform_frameworks_base/$FWB_SHA/core/java/android/os/ParcelFileDescriptor.aidl" "$CL/aidl/android/os/ParcelFileDescriptor.aidl"
+          for p in libs/nativewindow/include/system/window.h libs/nativewindow/include/vndk/window.h \
+                   libs/nativewindow/include/vndk/hardware_buffer.h libs/nativewindow/include/apex/window.h \
+                   libs/nativebase/include/nativebase/nativebase.h \
+                   libs/binder/ndk/include_platform/android/binder_manager.h \
+                   libs/binder/ndk/include_platform/android/binder_process.h; do
+            fetch "$raw/GrapheneOS/platform_frameworks_native/$FWN_SHA/$p" "$CL/include/${p#libs/*/include*/}"
+          done
+          for p in libcutils/include/cutils/native_handle.h libsystem/include/system/graphics.h \
+                   libsystem/include/system/graphics-base.h libsystem/include/system/graphics-base-v1.0.h \
+                   libsystem/include/system/graphics-base-v1.1.h libsystem/include/system/graphics-base-v1.2.h \
+                   libsystem/include/system/graphics-sw.h; do
+            fetch "$raw/GrapheneOS/platform_system_core/$SYSCORE_SHA/$p" "$CL/include/${p#lib*/include/}"
+          done
+          for f in errors.h expected.h result.h scopeguard.h no_destructor.h macros.h thread_annotations.h; do
+            fetch "$raw/MaDeG/libbase-ndk/$LIBBASE_SHA/include/android-base/$f" "$CL/include/android-base/$f"
+          done
+          # Minimal NDK-only shims for the AOSP build-only dependencies of the client.
+          printf '%s\n' \
+            '#pragma once' \
+            '#include <string>' \
+            'namespace fmt { template <typename... Args> inline std::string format(const std::string& f, Args&&...) { return f; } }' \
+            '#define FMT_STRING(x) x' > "$CL/include/android-base/format.h"
+          cat > "$CL/include/android-base/logging.h" <<'EOF'
+          #pragma once
+          #include <errno.h>
+          #include <string.h>
+          #include <sstream>
+          #include <android/log.h>
+          namespace android { namespace base {
+          enum LogSeverity { VERBOSE, DEBUG, INFO, WARNING, ERROR, FATAL };
+          class LogMessage {
+           public:
+            LogMessage(LogSeverity s, const char*, int) : severity_(s) {}
+            ~LogMessage() {
+              __android_log_print(severity_ >= ERROR ? ANDROID_LOG_ERROR :
+                                  (severity_ == WARNING ? ANDROID_LOG_WARN : ANDROID_LOG_INFO),
+                                  "crosvm-display-client", "%s", stream_.str().c_str());
+            }
+            std::ostream& stream() { return stream_; }
+           private:
+            LogSeverity severity_; std::ostringstream stream_;
+          };
+          }}
+          #define LOG(severity) ::android::base::LogMessage(::android::base::severity, __FILE__, __LINE__).stream()
+          #define PLOG(severity) ::android::base::LogMessage(::android::base::severity, __FILE__, __LINE__).stream() << " (" << strerror(errno) << ")"
+          EOF
+          cat > "$CL/include/cutils/trace.h" <<'EOF'
+          #pragma once
+          #define ATRACE_TAG_GRAPHICS 0
+          #define ATRACE_TAG_ALWAYS 0
+          #define ATRACE_ENABLED() false
+          #define ATRACE_BEGIN(name) ((void)0)
+          #define ATRACE_END() ((void)0)
+          #define ATRACE_INT64(name, value) ((void)0)
+          #define ATRACE_INT(name, value) ((void)0)
+          #define ATRACE_ASYNC_BEGIN(name, cookie) ((void)0)
+          #define ATRACE_ASYNC_END(name, cookie) ((void)0)
+          EOF
+          # The AIDL NDK backend ships in the runner's build-tools; download it only if absent.
+          AIDL=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -maxdepth 2 -name aidl -type f 2>/dev/null | sort | tail -1 || true)
+          if [ -z "$AIDL" ]; then
+            curl --fail --location --retry 3 -o "$CL/build-tools.zip" https://dl.google.com/android/repository/build-tools_r35_linux.zip
+            unzip -q "$CL/build-tools.zip" -d "$CL/build-tools"
+            AIDL=$(find "$CL/build-tools" -name aidl -type f | head -1)
+          fi
+          "$AIDL" --lang=ndk -I "$CL/aidl" -o "$CL/aidl-out" --header_out="$CL/aidl-hdr" \
+            "$CL/aidl/android/crosvm/ICrosvmAndroidDisplayService.aidl" "$CL/aidl/android/crosvm/DisplayConfig.aidl"
+          CXX="$TC/bin/aarch64-linux-android35-clang++"
+          CFLAGS="-std=c++20 -DANDROID -O2 -fPIC -I$CL/include -I$CL/src -I$CL/aidl-hdr"
+          for f in crosvm_android_display_client media_codec_dl surface_control_dl; do
+            "$CXX" $CFLAGS -c "$CL/src/$f.cpp" -o "$CL/obj/$f.o"
+          done
+          for f in ICrosvmAndroidDisplayService DisplayConfig; do
+            "$CXX" $CFLAGS -c "$CL/aidl-out/android/crosvm/$f.cpp" -o "$CL/obj/$f.o"
+          done
+          "$TC/bin/llvm-ar" rcs "$CL/libcrosvm_android_display_client.a" "$CL"/obj/*.o
+          # Link-time import stubs: the platform-only binder/nativewindow entry points are not in
+          # the NDK stub .so files but exist on the device; keep their real sonames and the exact
+          # version nodes so the runtime binds to the platform libraries.
+          python3 -I - <<'PY'
+          import collections, os, pathlib, subprocess
+          cl = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / 'native-display-client'
+          nm = os.environ['TC'] + '/bin/llvm-nm'
+          sdk = os.environ['TC'] + '/sysroot/usr/lib/aarch64-linux-android/35'
+          def symbol_versions(so):
+              out = subprocess.check_output([nm, '-D', '--defined-only', sdk + '/' + so], text=True)
+              m = {}
+              for line in out.splitlines():
+                  parts = line.split()
+                  if len(parts) >= 3 and parts[1] in ('T', 'W', 'i'):
+                      name, _, version = parts[2].partition('@@')
+                      m[name] = version
+              return m
+          def undefined_symbols(archive):
+              out = subprocess.check_output([nm, '-u', '--format=just-symbols', str(archive)], text=True)
+              return sorted({line.strip() for line in out.splitlines() if line.strip()})
+          binder = symbol_versions('libbinder_ndk.so')
+          native = symbol_versions('libnativewindow.so')
+          platform_only = {
+              'ABinderProcess_setThreadPoolMaxThreadCount': ('binder', 'LIBBINDER_NDK'),
+              'ABinderProcess_startThreadPool': ('binder', 'LIBBINDER_NDK'),
+              'AServiceManager_addService': ('binder', 'LIBBINDER_NDK'),
+              'ANativeWindowBuffer_getHardwareBuffer': ('native', 'LIBNATIVEWINDOW'),
+              'ANativeWindow_cancelBuffer': ('native', 'LIBNATIVEWINDOW'),
+              'ANativeWindow_dequeueBuffer': ('native', 'LIBNATIVEWINDOW'),
+              'ANativeWindow_queueBuffer': ('native', 'LIBNATIVEWINDOW'),
+              'ANativeWindow_setBuffersTimestamp': ('native', 'LIBNATIVEWINDOW'),
+              'ANativeWindow_setUsage': ('native', 'LIBNATIVEWINDOW'),
+          }
+          pairs = {'binder': [], 'native': []}
+          for name in undefined_symbols(cl / 'libcrosvm_android_display_client.a'):
+              if name in binder:
+                  pairs['binder'].append((name, binder[name]))
+              elif name in native:
+                  pairs['native'].append((name, native[name]))
+              elif name in platform_only:
+                  library, version = platform_only[name]
+                  pairs[library].append((name, version))
+          assert len(pairs['binder']) > 20 and len(pairs['native']) > 5, {k: len(v) for k, v in pairs.items()}
+          for library, soname in (('binder', 'libbinder_ndk.so'), ('native', 'libnativewindow.so')):
+              grouped = collections.OrderedDict()
+              for name, version in pairs[library]:
+                  grouped.setdefault(version, []).append(name)
+              (cl / 'linkstubs' / (library + '_stub.c')).write_text(
+                  ''.join('void %s(void) {}\n' % name for name, _ in pairs[library]))
+              (cl / 'linkstubs' / (library + '.map')).write_text(
+                  ''.join('%s { global: %s; local: *; };\n' % (version, '; '.join(names))
+                          for version, names in grouped.items()))
+              print(library, soname, len(pairs[library]), list(grouped))
+          PY
+          for stub in binder native; do
+            soname=libbinder_ndk.so
+            [ "$stub" = native ] && soname=libnativewindow.so
+            "$TC/bin/aarch64-linux-android35-clang" -shared -fPIC -Wl,-soname,$soname \
+              -Wl,--version-script="$CL/linkstubs/$stub.map" \
+              -o "$CL/linkstubs/$soname" "$CL/linkstubs/${stub}_stub.c"
+          done
+          "$TC/bin/llvm-nm" -D --defined-only "$CL/linkstubs/libbinder_ndk.so" | head -3
+          ls -l "$CL/libcrosvm_android_display_client.a" "$CL/linkstubs"
+
       - name: Android Cargo check discovery (real native build scripts, no stubs)
         shell: bash
         run: |
@@ -235,7 +403,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/native-headers"
           cp /usr/include/wayland*.h "$GITHUB_WORKSPACE/native-headers/"
           export CFLAGS_aarch64_linux_android="-I$GITHUB_WORKSPACE/native-headers"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN/../lib"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$GITHUB_WORKSPACE/native-libs -C link-arg=-Wl,-rpath,\$ORIGIN/../lib -C link-arg=-Wl,--whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/libcrosvm_android_display_client.a -C link-arg=-Wl,--no-whole-archive -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libbinder_ndk.so -C link-arg=$GITHUB_WORKSPACE/native-display-client/linkstubs/libnativewindow.so -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++_static.a -C link-arg=$TC/sysroot/usr/lib/aarch64-linux-android/libc++abi.a"
           # Minijail's generic Cargo script invents a GCC prefix. Select the genuine NDK tools
           # and build only the static archive the Rust script actually links (not unused CLI/shared targets).
           python3 -I - <<'PY'
@@ -396,7 +564,7 @@ jobs:
           python3 -I - <<'PY'
           import json, re, subprocess, os
           from pathlib import Path
-          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so','libz.so'}
+          platform = {'libandroid.so','libEGL.so','libGLESv2.so','libvulkan.so','liblog.so','libdl.so','libm.so','libc.so','libz.so','libbinder_ndk.so','libnativewindow.so'}
           runtime = Path('../evidence/runtime')
           closure = {}
           files = [p for p in runtime.rglob('*') if p.is_file()]
@@ -432,7 +600,7 @@ jobs:
           test ! -f source/Cargo.lock || cp source/Cargo.lock evidence/Cargo.lock.resolved
           git -C source diff --binary > evidence/source.patch
           git -C minijail diff --binary > evidence/minijail.patch
-          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc. VNC uses the fork bridge C compiled against LibVNCServer 0.9.15 headers and linked to the DroidVM APK libvncserver.so; no Android AIDL display. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No stubs or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
+          printf '%s\n' 'Real Android API33 aarch64 release with gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display. VNC uses the fork bridge C compiled against LibVNCServer 0.9.15 headers and linked to the DroidVM APK libvncserver.so; native display links the DroidVM libcrosvm_android_display_client ABI compiled with the NDK AIDL backend, and its link-time binder/nativewindow import stubs resolve to the platform libraries at runtime. Paired detach+lease patches8b193b4fd5211134b3cdae224157fe93a99fccef and host3d286762abd3c5d0eec7481c0a0fc18c4be527ea. Forked children log to stderr using public liblog API. No runtime stubs or ignored unresolved symbols. Runtime/device/GPU not tested by CI.' > evidence/scope.txt
           for dir in trace-patches source minijail pair-patches libcap-source libffi-source wayland-source; do printf '%s ' "$dir"; git -C "$dir" rev-parse HEAD; done > evidence/source-pins.txt
           printf '%s\n' "diagnostic_commit=$GITHUB_SHA" "green_parent=5c1b84765e8e170da0da9ae9ca285041bbb68db8" "run_url=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/gpu-create-trace-provenance.txt
           printf '%s\n' 'Only GFXSTREAM_NIRI_IMAGE_TRACE=1 enables the per-site 16-attempt budgets. devices logs resource_create_3d entry and rutabaga result/error; gfxstream logs create_3d entry and stream_renderer_resource_create return. Metadata only, no payload read and no behavior change.' >> evidence/scope.txt
