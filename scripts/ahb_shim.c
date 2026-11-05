@@ -22,8 +22,9 @@
  * three times, so the caller is the Mali driver.
  *
  * Build (NDK r27c, as in .github/workflows/build-ahb-shim.yml): compile with
- * -fno-omit-frame-pointer -funwind-tables and link the NDK static
- * lib/clang/<ver>/lib/linux/aarch64/libunwind.a for _Unwind_Backtrace.
+ * -fno-omit-frame-pointer -funwind-tables.  _Unwind_Backtrace is exported by
+ * bionic libc itself (LIBC_Q, API 30), so no libunwind.a is linked in; that
+ * archive would also drag malloc/stdio/pthread_rwlock imports into the shim.
  *
  * Env:
  *   AHB_SHIM_LOG=/path             append log to /path (default: stderr)
