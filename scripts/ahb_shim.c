@@ -22,10 +22,11 @@
  * three times, so the caller is the Mali driver.
  *
  * Build (NDK r27c, as in .github/workflows/build-ahb-shim.yml): compile with
- * -fno-omit-frame-pointer -funwind-tables.  _Unwind_Backtrace is exported by
- * bionic libc itself (LIBC_Q, API 30) and is resolved once with dlsym() in the
- * constructor.  Referencing it directly would make clang link the NDK
- * libunwind.a, which drags malloc/stdio/pthread_rwlock imports into the shim.
+ * -fno-omit-frame-pointer -funwind-tables.  _Unwind_Backtrace and
+ * _Unwind_GetIP are exported by bionic libc itself (LIBC_Q, API 30) and are
+ * resolved once with dlsym() in the constructor.  A direct reference to either
+ * would make clang link the NDK libunwind.a, which drags
+ * malloc/stdio/pthread_rwlock imports into the shim.
  *
  * Env:
  *   AHB_SHIM_LOG=/path             append log to /path (default: stderr)
@@ -55,6 +56,7 @@ typedef void AHardwareBuffer;
 
 typedef void (*AhbFn)(AHardwareBuffer *);
 typedef _Unwind_Reason_Code (*UnwindBacktraceFn)(_Unwind_Trace_Fn, void *);
+typedef uintptr_t (*UnwindGetIPFn)(struct _Unwind_Context *);
 
 #define AHB_SHIM_LINE_MAX 512U
 /* Whole multi-line block (caller + up to 16 frames) is built on the stack. */
@@ -72,6 +74,7 @@ static uintptr_t g_self_base = 0;
 static unsigned g_acquire_null_seen = 0;
 static unsigned g_release_null_seen = 0;
 static UnwindBacktraceFn g_unwind_bt = NULL;
+static UnwindGetIPFn g_unwind_getip = NULL;
 static AhbFn g_real_acquire = NULL;
 static AhbFn g_real_release = NULL;
 
@@ -127,9 +130,14 @@ static int shim_tid(void)
 static _Unwind_Reason_Code shim_bt_cb(struct _Unwind_Context *ctx, void *arg)
 {
     struct shim_bt *bt = (struct shim_bt *)arg;
-    uintptr_t pc = (uintptr_t)_Unwind_GetIP(ctx);
+    uintptr_t pc = 0;
     Dl_info info;
 
+    /* Both unwinder entries are dlsym()'d: a direct reference to
+     * _Unwind_GetIP as well would make clang link NDK libunwind.a. */
+    if (g_unwind_getip != NULL) {
+        pc = (uintptr_t)g_unwind_getip(ctx);
+    }
     if (pc == 0) {
         return _URC_NO_REASON;
     }
@@ -339,10 +347,15 @@ __attribute__((constructor)) static void shim_ctor(void)
         g_trace_release = 1;
     }
     g_frames = shim_parse_frames(frames);
-    /* Resolved here, never on a NULL path: bionic libc exports
-     * _Unwind_Backtrace (LIBC_Q); a direct reference would make clang link
-     * NDK libunwind.a and its malloc/stdio/lock imports into this DSO. */
+    /* Resolved here, never on a NULL path: bionic libc exports both entries
+     * (LIBC_Q); direct references would make clang link NDK libunwind.a and
+     * its malloc/stdio/lock imports into this DSO. */
     g_unwind_bt = (UnwindBacktraceFn)dlsym(RTLD_DEFAULT, "_Unwind_Backtrace");
+    g_unwind_getip = (UnwindGetIPFn)dlsym(RTLD_DEFAULT, "_Unwind_GetIP");
+    if (g_unwind_bt == NULL || g_unwind_getip == NULL) {
+        g_unwind_bt = NULL;
+        g_unwind_getip = NULL;
+    }
     if (dladdr((void *)&shim_emit, &self) != 0 && self.dli_fbase != NULL) {
         g_self_base = (uintptr_t)self.dli_fbase;
     }
