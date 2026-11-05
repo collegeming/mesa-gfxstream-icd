@@ -23,8 +23,9 @@
  *
  * Build (NDK r27c, as in .github/workflows/build-ahb-shim.yml): compile with
  * -fno-omit-frame-pointer -funwind-tables.  _Unwind_Backtrace is exported by
- * bionic libc itself (LIBC_Q, API 30), so no libunwind.a is linked in; that
- * archive would also drag malloc/stdio/pthread_rwlock imports into the shim.
+ * bionic libc itself (LIBC_Q, API 30) and is resolved once with dlsym() in the
+ * constructor.  Referencing it directly would make clang link the NDK
+ * libunwind.a, which drags malloc/stdio/pthread_rwlock imports into the shim.
  *
  * Env:
  *   AHB_SHIM_LOG=/path             append log to /path (default: stderr)
@@ -53,6 +54,7 @@
 typedef void AHardwareBuffer;
 
 typedef void (*AhbFn)(AHardwareBuffer *);
+typedef _Unwind_Reason_Code (*UnwindBacktraceFn)(_Unwind_Trace_Fn, void *);
 
 #define AHB_SHIM_LINE_MAX 512U
 /* Whole multi-line block (caller + up to 16 frames) is built on the stack. */
@@ -69,6 +71,7 @@ static unsigned g_frames = AHB_SHIM_FRAMES_DEFAULT;
 static uintptr_t g_self_base = 0;
 static unsigned g_acquire_null_seen = 0;
 static unsigned g_release_null_seen = 0;
+static UnwindBacktraceFn g_unwind_bt = NULL;
 static AhbFn g_real_acquire = NULL;
 static AhbFn g_real_release = NULL;
 
@@ -190,8 +193,8 @@ shim_log_null(void *caller, const char *kind, unsigned *seen)
     bt.count = 0;
     bt.max = g_frames;
     bt.self_base = g_self_base;
-    if (bt.max > 0) {
-        (void)_Unwind_Backtrace(shim_bt_cb, &bt);
+    if (bt.max > 0 && g_unwind_bt != NULL) {
+        (void)g_unwind_bt(shim_bt_cb, &bt);
     }
 
     for (i = 0; i < bt.count && off + 1 < sizeof(block); i++) {
@@ -336,6 +339,10 @@ __attribute__((constructor)) static void shim_ctor(void)
         g_trace_release = 1;
     }
     g_frames = shim_parse_frames(frames);
+    /* Resolved here, never on a NULL path: bionic libc exports
+     * _Unwind_Backtrace (LIBC_Q); a direct reference would make clang link
+     * NDK libunwind.a and its malloc/stdio/lock imports into this DSO. */
+    g_unwind_bt = (UnwindBacktraceFn)dlsym(RTLD_DEFAULT, "_Unwind_Backtrace");
     if (dladdr((void *)&shim_emit, &self) != 0 && self.dli_fbase != NULL) {
         g_self_base = (uintptr_t)self.dli_fbase;
     }
@@ -351,7 +358,8 @@ __attribute__((constructor)) static void shim_ctor(void)
      * build when the same path is overwritten on device. */
     n = snprintf(line, sizeof(line),
                  "AHB-SHIM loaded pid=%d trace_release=%d log_fd=%d "
-                 "frames=%u shim=v3\n",
-                 (int)getpid(), g_trace_release, g_log_fd, g_frames);
+                 "frames=%u unwind=%d shim=v3\n",
+                 (int)getpid(), g_trace_release, g_log_fd, g_frames,
+                 g_unwind_bt != NULL ? 1 : 0);
     shim_emit(line, n);
 }

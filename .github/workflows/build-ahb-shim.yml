@@ -76,7 +76,14 @@ jobs:
           fi
           echo "no malloc/printf/pthread imports"
           echo "== v3 backtrace support =="
-          grep -q '_Unwind_Backtrace' dynsyms-all.txt
+          # Resolved with dlsym() in the constructor; only the name string may
+          # appear.  A dynsym reference would mean libunwind.a got linked and
+          # brought malloc/stdio/pthread_rwlock in.
+          grep -aq '_Unwind_Backtrace' libahb_shim.so
+          if grep -q '_Unwind_Backtrace' dynsyms-all.txt; then
+            echo "::error::_Unwind_Backtrace must not be a link-time symbol"
+            exit 1
+          fi
           grep -Eq '[[:space:]]dladdr(@|$)' dynsyms-all.txt
           LIBC_STUB=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android" -maxdepth 2 -name libc.so | sort | tail -1)
           echo "libc stub: $LIBC_STUB"

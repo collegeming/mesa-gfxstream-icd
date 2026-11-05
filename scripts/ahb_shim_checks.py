@@ -10,8 +10,10 @@ For both interposed symbols this asserts:
     or does an indirect 'br' tail branch,
   * the non-NULL path still tail-branches ('br') to the resolved function.
 
-It also asserts that the v3 logger path stays dlsym-free and actually uses
-_Unwind_Backtrace + dladdr for the frame dump.
+It also asserts that the v3 logger path stays dlsym-free, calls dladdr(), and
+invokes the resolved _Unwind_Backtrace through a function pointer (blr).  The
+symbol name itself is checked in the ELF strings by the workflow, because the
+unwinder is resolved with dlsym() in the constructor rather than linked.
 
 Usage: ahb_shim_checks.py <llvm-objdump> <libahb_shim.so>
 """
@@ -138,11 +140,13 @@ def check_loggers(funcs):
                        for _, _, ops in funcs[name])
     if "dlsym" in ops_all:
         fail("%s references dlsym" % FRAME_SINK)
-    if "_Unwind_Backtrace" not in ops_all:
-        fail("%s does not call _Unwind_Backtrace" % FRAME_SINK)
     if "dladdr" not in ops_all:
         fail("%s does not call dladdr" % FRAME_SINK)
-    print("OK %s (%d clone(s)): no dlsym, calls _Unwind_Backtrace and dladdr"
+    if not any(mnemonic == "blr" for name in sinks
+               for _, mnemonic, _ in funcs[name]):
+        fail("%s does not call the resolved unwinder through a pointer"
+             % FRAME_SINK)
+    print("OK %s (%d clone(s)): no dlsym, calls dladdr and the unwinder via blr"
           % (FRAME_SINK, len(sinks)))
 
 
