@@ -1,12 +1,16 @@
 /*
  * ahb_shim.c - LD_PRELOAD diagnostic shim for AHardwareBuffer_acquire/release.
  *
- * Why: crosvm dies in AHardwareBuffer_acquire(0) -> RefBase::incStrong
+ * v2: a NULL release is logged (rate limited) and dropped.  libnativewindow's
+ *     release tail-calls RefBase::decStrong() without a NULL check either, so
+ *     forwarding NULL faults exactly like the v1 acquire case did.
+ *
+ * Why (v1): crosvm died in AHardwareBuffer_acquire(0) -> RefBase::incStrong
  * (fault 0x8).  AGENT-AHB-SYMBOLS.md shows acquire() has no NULL check, and
  * AGENT-AHB-CRASH-STACK.md 8/9 shows the crashing thread carries no gfxstream
- * AHB breadcrumb, so the caller is most likely the Mali driver (or another
- * module we do not own).  This shim records the caller of a NULL acquire and
- * returns instead of faulting; non-NULL calls go to the real implementation.
+ * AHB breadcrumb.  On device the v1 shim caught
+ *   module=/vendor/lib64/egl/libGLES_mali.so+0x128b3cc
+ * three times, so the caller is the Mali driver.
  *
  * Build (NDK r27c, same as build-host.yml):
  *   aarch64-linux-android33-clang -shared -fPIC -O2 -Wall -Wextra -Werror \
@@ -14,12 +18,12 @@
  *
  * Env:
  *   AHB_SHIM_LOG=/path             append log to /path (default: stderr)
- *   AHB_SHIM_TRACE_RELEASE=1       also log every release (default: off)
+ *   AHB_SHIM_TRACE_RELEASE=1       also log every non-NULL release (default: off)
  *
- * Rules honoured on the NULL path: no malloc, no stdio stream, no lock of our
- * own.  It uses __builtin_return_address(0), dladdr(), snprintf() into a stack
+ * Rules honoured on both NULL paths: no malloc, no stdio stream, no lock of our
+ * own.  They use __builtin_return_address(0), dladdr(), snprintf() into a stack
  * buffer and write(2).  The real symbol is resolved with dlsym(RTLD_NEXT) only
- * when it is about to be called, i.e. never on the NULL path.
+ * when it is about to be called, i.e. never on a NULL path.
  */
 #define _GNU_SOURCE
 
@@ -38,10 +42,13 @@ typedef void AHardwareBuffer;
 typedef void (*AhbFn)(AHardwareBuffer *);
 
 #define AHB_SHIM_LINE_MAX 512U
+/* A NULL release can repeat every frame; keep the first few lines only. */
+#define AHB_SHIM_RELEASE_NULL_MAX 8U
 
 static int g_log_fd = STDERR_FILENO;
 static int g_trace_release = 0;
 static int g_resolve_warned = 0;
+static unsigned g_release_null_seen = 0;
 static AhbFn g_real_acquire = NULL;
 static AhbFn g_real_release = NULL;
 
@@ -75,9 +82,9 @@ static int shim_tid(void)
 }
 
 /* caller is passed in so that -O2 inlining can never skew
- * __builtin_return_address(0). */
+ * __builtin_return_address(0).  kind is "acquire-null" or "release-null". */
 static void __attribute__((noinline))
-shim_log_acquire_null(void *caller)
+shim_log_null(void *caller, const char *kind)
 {
     Dl_info info;
     const char *module = "?";
@@ -96,9 +103,25 @@ shim_log_acquire_null(void *caller)
     }
 
     n = snprintf(line, sizeof(line),
-                 "AHB-SHIM acquire-null caller=%p module=%s+0x%lx tid=%d\n",
-                 caller, module, offset, shim_tid());
+                 "AHB-SHIM %s caller=%p module=%s+0x%lx tid=%d\n",
+                 kind, caller, module, offset, shim_tid());
     shim_emit(line, n);
+}
+
+static void __attribute__((noinline)) shim_log_acquire_null(void *caller)
+{
+    shim_log_null(caller, "acquire-null");
+}
+
+static void __attribute__((noinline)) shim_log_release_null(void *caller)
+{
+    unsigned seen = __atomic_fetch_add(&g_release_null_seen, 1,
+                                       __ATOMIC_RELAXED);
+
+    if (seen >= AHB_SHIM_RELEASE_NULL_MAX) {
+        return;
+    }
+    shim_log_null(caller, "release-null");
 }
 
 static void shim_log_release(AHardwareBuffer *buffer)
@@ -148,6 +171,14 @@ void AHardwareBuffer_acquire(AHardwareBuffer *buffer)
 
 void AHardwareBuffer_release(AHardwareBuffer *buffer)
 {
+    if (buffer == NULL) {
+        /* Same hazard as acquire: libnativewindow's release has no NULL check
+         * and tail-calls decStrong(0), which faults on [x0 + 8]. */
+        void *caller = __builtin_return_address(0);
+        shim_log_release_null(caller);
+        return;
+    }
+
     if (g_trace_release != 0) {
         shim_log_release(buffer);
     }
@@ -179,10 +210,11 @@ __attribute__((constructor)) static void shim_ctor(void)
         }
     }
 
-    /* One banner line so a run without any acquire-null can still be told
-     * apart from "LD_PRELOAD never reached this process". */
+    /* One banner line so a run without any NULL event can still be told apart
+     * from "LD_PRELOAD never reached this process"; shim=v2 identifies the
+     * build when the same path is overwritten on device. */
     n = snprintf(line, sizeof(line),
-                 "AHB-SHIM loaded pid=%d trace_release=%d log_fd=%d\n",
+                 "AHB-SHIM loaded pid=%d trace_release=%d log_fd=%d shim=v2\n",
                  (int)getpid(), g_trace_release, g_log_fd);
     shim_emit(line, n);
 }
