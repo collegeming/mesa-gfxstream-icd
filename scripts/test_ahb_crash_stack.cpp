@@ -1,7 +1,7 @@
 // Host-side unit test for the diagnostic AHB crash stack tracer.
 //
 // Build (CI does this):
-//   c++ -std=c++17 -pthread -Wall -Wextra -Werror -fno-omit-frame-pointer \
+//   c++ -std=c++17 -pthread -Wall -Wextra -Werror -fno-omit-frame-pointer
 //       -I source/host/vulkan scripts/test_ahb_crash_stack.cpp -o test-ahb-crash-stack
 //
 // The test proves the two properties that make the tracer safe to ship in a
