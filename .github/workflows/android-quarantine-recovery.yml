@@ -378,8 +378,8 @@ jobs:
           PY
           git -C source diff --check
           cd source
-          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc' 2>&1 | tee ../evidence/cargo-check.log
-          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc' 2>&1 | tee ../evidence/cargo-build.log
+          cargo check --locked --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display' 2>&1 | tee ../evidence/cargo-check.log
+          cargo build --locked --release --target aarch64-linux-android --no-default-features --features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc,android_display' 2>&1 | tee ../evidence/cargo-build.log
           cp target/aarch64-linux-android/release/crosvm ../evidence/crosvm
           "$TC/bin/llvm-readelf" -h -d ../evidence/crosvm > ../evidence/crosvm-elf.txt
           sha256sum ../evidence/crosvm > ../evidence/crosvm.sha256
