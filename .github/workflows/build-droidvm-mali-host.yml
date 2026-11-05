@@ -49,6 +49,7 @@ on:
       - 'scripts/*ahb_null_guard*'
       - 'scripts/*ahb_alloc_killswitch*'
       - 'scripts/*ahb_crash_stack*'
+      - 'scripts/ahb_crash_trace.h'
       - 'scripts/*systemblob*'
       - 'scripts/*buffer_host_pointer*'
       - 'scripts/*cib_color_dump*'

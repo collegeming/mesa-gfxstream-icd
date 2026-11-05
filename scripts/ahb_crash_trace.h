@@ -22,6 +22,12 @@
 // The handler chains to the previously installed handler after printing, so
 // crosvm's own crash handler still runs (it prints its register dump and calls
 // _exit(128+sig), deliberately bypassing debuggerd).
+//
+// Every breadcrumb line carries `tid=<gettid>` so a crash report can tell
+// whether the fault happened on the thread that last touched the AHB or on an
+// unrelated compositor/display/driver worker. The ring holds 64 entries, which
+// is a full alloc -> import -> driver-acquire -> release window for one
+// ColorBuffer.
 #ifndef GFXSTREAM_HOST_VULKAN_AHB_CRASH_TRACE_H_
 #define GFXSTREAM_HOST_VULKAN_AHB_CRASH_TRACE_H_
 
@@ -255,8 +261,12 @@ inline const char* ModuleFor(uintptr_t pc, uintptr_t* offset) {
 // written; a concurrent overwrite can still mix fields, which is acceptable
 // for a diagnostic.
 // ---------------------------------------------------------------------------
-constexpr uint32_t kRingSlots = 16;
-constexpr size_t kRingLine = 128;
+// The ring must cover a whole AHB lifecycle (alloc + import + driver acquire +
+// free), not just the last few calls. 64 slots is the floor required by the
+// diagnostic contract; static_assert keeps a future edit from shrinking it.
+constexpr uint32_t kRingSlots = 64;
+static_assert(kRingSlots >= 64, "the AHB breadcrumb ring must hold at least 64 entries");
+constexpr size_t kRingLine = 192;
 inline char gRing[kRingSlots][kRingLine];
 inline std::atomic<uint8_t> gRingLen[kRingSlots];
 inline std::atomic<uint32_t> gRingSeq{0};
@@ -323,9 +333,9 @@ inline void WriteFrame(const char* kind, int index, uintptr_t pc) {
 }
 
 inline void DumpRing() {
-    char line[192];
+    char line[256];
     Writer header(line, sizeof(line));
-    header.str("[AHB-CRASH-TRACE] breadcrumbs (oldest first, last 16):\n");
+    header.str("[AHB-CRASH-TRACE] breadcrumbs (oldest first, last 64):\n");
     header.finish();
     WriteAll(gOutFd, line, header.len);
 
@@ -556,9 +566,14 @@ inline void Breadcrumb(const char* site, const void* pointer, unsigned long long
     // Bound the ordinary-context log so a hot path cannot flood it.
     if (gBreadcrumbCount.fetch_add(1, std::memory_order_acq_rel) >= 512) return;
 
-    char payload[112];
+    // tid is recorded per crumb so the crash report can tell whether the fault
+    // happened on the thread that performed the last AHB operation, or on a
+    // compositor/display/driver worker that never appears in this ring.
+    char payload[176];
     Writer w(payload, sizeof(payload));
-    w.str("site=");
+    w.str("tid=");
+    w.dec(static_cast<uint64_t>(TraceGettid()));
+    w.str(" site=");
     w.str(site != nullptr ? site : "?");
     w.str(" ptr=0x");
     w.hex(reinterpret_cast<uintptr_t>(pointer));
@@ -573,7 +588,7 @@ inline void Breadcrumb(const char* site, const void* pointer, unsigned long long
     gRing[slot][n] = '\0';
     gRingLen[slot].store(static_cast<uint8_t>(n), std::memory_order_release);
 
-    char line[192];
+    char line[256];
     Writer out(line, sizeof(line));
     out.str("[AHB-CRASH-TRACE] ");
     out.str(payload);
