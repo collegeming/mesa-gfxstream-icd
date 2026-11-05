@@ -38,6 +38,8 @@ for needle in ("GFXSTREAM_CRASH_TRACE", "GFXSTREAM_CRASH_TRACE_FILE",
     assert needle in header_text, f"header missing {needle}"
 assert "v[0] == '1' && v[1] == '\\0'" in header_text, \
     "enable gate is not the exact GFXSTREAM_CRASH_TRACE=1 check"
+assert 'extern "C" inline void GfxAhbCrashTraceHandler' in header_text, \
+    "the signal handler must be inline so both translation units share one definition"
 assert "printf(" not in header_text and "malloc(" not in header_text, \
     "signal path must not use printf/malloc"
 print("PASS: header is default-off, async-signal-safe, and chains to the previous handler")
@@ -50,10 +52,13 @@ assert ops.read_text(encoding="utf-8").count('#include "ahb_crash_trace.h"') == 
 print("PASS: vk_common_operations.cpp include and the deployed AHB sites are marked exactly once")
 
 decoder_text = decoder.read_text(encoding="utf-8")
-for marker in ("AHB-CRASH-TRACE-DECODER-HANDLE-BEGIN", "AHB-CRASH-TRACE-FIRST-BEGIN"):
+assert decoder_text.count('#include "ahb_crash_trace.h"') == 1
+assert decoder_text.count("AHB-CRASH-TRACE-INCLUDE-DECODER-BEGIN") == 1
+for marker in ("AHB-CRASH-TRACE-DECODER-HANDLE-BEGIN", "AHB-CRASH-TRACE-GUEST-AHB-BEGIN",
+               "AHB-CRASH-TRACE-FIRST-BEGIN"):
     assert decoder_text.count(marker) == 1, \
         f"{marker} must appear exactly once in vk_decoder_global_state.cpp"
-print("PASS: decoder handle import and AHB-first helper are traced")
+print("PASS: decoder includes the tracer; handle import, guest pNext AHB import, and AHB-first helper are traced")
 
 # Re-running the patch must not change one byte.
 before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in (header, ops, decoder)}
