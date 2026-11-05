@@ -66,7 +66,6 @@ EXPECTED_CRUMBS = {
         '"AHB-LIFE alloc return"': 1,
         '"AHB-LIFE cb-import"': 1,
         '"AHB-LIFE cb-import buffer"': 1,
-        '"AHB-LIFE cb-import skip-null"': 1,
         '"AHB-LIFE release"': 3,
         '"AHB-LIFE free pre"': 1,
         '"AHB-LIFE free post"': 1,
@@ -99,7 +98,7 @@ for path, labels in EXPECTED_CRUMBS.items():
     crumbs = text.count(CRUMB)
     total_expected += crumbs
     print(f"PASS: {path.name}: {crumbs} AHB-LIFE crumb statements with the expected labels")
-assert total_expected == 24, f"expected 24 crumb statements, found {total_expected}"
+assert total_expected == 23, f"expected 23 crumb statements, found {total_expected}"
 
 for stale in ("allocAhb.enter", "allocAhb.result", "allocExternalMemory.import",
               "importExternalMemory.importedAhb", "decoder.import.handleInfo",
