@@ -77,6 +77,21 @@ INCLUDE_NEW = """#ifdef __ANDROID__
 """
 edit(OPS, INCLUDE_OLD, INCLUDE_NEW, "AHB-CRASH-TRACE-INCLUDE")
 
+# The decoder defines its own AHB import breadcrumbs, so it needs the same
+# header. Every definition in the header is inline or function-local; the two
+# translation units therefore share one handler, one maps table and one ring.
+DECODER_INCLUDE_OLD = """#include <limits>
+namespace gfxstream { namespace host { namespace cib {
+"""
+DECODER_INCLUDE_NEW = """#include <limits>
+
+// AHB-CRASH-TRACE-INCLUDE-DECODER-BEGIN
+#include "ahb_crash_trace.h"
+// AHB-CRASH-TRACE-INCLUDE-DECODER-END
+namespace gfxstream { namespace host { namespace cib {
+"""
+edit(DECODER, DECODER_INCLUDE_OLD, DECODER_INCLUDE_NEW, "AHB-CRASH-TRACE-INCLUDE-DECODER")
+
 # ---------------------------------------------------------------------------
 # 2. The explicit ColorBuffer AHB allocation. allocAhb() is the only place that
 #    turns a guest image shape into AHardwareBuffer_allocate().
@@ -187,6 +202,32 @@ DECODER_HANDLE_NEW = """                    // AHB-CRASH-TRACE-DECODER-HANDLE-BE
 """
 edit(DECODER, DECODER_HANDLE_OLD, DECODER_HANDLE_NEW, "AHB-CRASH-TRACE-DECODER-HANDLE",
      required=True)
+
+# ---------------------------------------------------------------------------
+# 7b. A guest-supplied VkImportAndroidHardwareBufferInfoANDROID in the pNext
+#     chain is forwarded to the driver untouched. This is the one AHB import
+#     site the null-handle guards do not cover; record its buffer value.
+# ---------------------------------------------------------------------------
+GUEST_AHB_OLD = """#ifdef __ANDROID__
+        const auto* diagnosticAhbInfo = vk_find_struct<VkImportAndroidHardwareBufferInfoANDROID>(&localAllocInfo);
+        if (diagnosticAhbInfo) {
+            diagnosticAhb = diagnosticAhbInfo->buffer;
+            diagnosticStreamType = STREAM_HANDLE_TYPE_PLATFORM_AHB;
+        }
+#endif
+"""
+GUEST_AHB_NEW = """#ifdef __ANDROID__
+        const auto* diagnosticAhbInfo = vk_find_struct<VkImportAndroidHardwareBufferInfoANDROID>(&localAllocInfo);
+        if (diagnosticAhbInfo) {
+            diagnosticAhb = diagnosticAhbInfo->buffer;
+            diagnosticStreamType = STREAM_HANDLE_TYPE_PLATFORM_AHB;
+            // AHB-CRASH-TRACE-GUEST-AHB-BEGIN
+            GFXSTREAM_AHB_TRACE("decoder.guestAhbImport", diagnosticAhbInfo->buffer, 0);
+            // AHB-CRASH-TRACE-GUEST-AHB-END
+        }
+#endif
+"""
+edit(DECODER, GUEST_AHB_OLD, GUEST_AHB_NEW, "AHB-CRASH-TRACE-GUEST-AHB", required=False)
 
 # ---------------------------------------------------------------------------
 # 8. AHB-first buffer allocation (runtime-disabled by GFXSTREAM_AHB_FIRST=0,

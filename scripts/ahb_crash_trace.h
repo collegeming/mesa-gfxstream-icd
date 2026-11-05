@@ -347,7 +347,7 @@ inline void DumpRing() {
     }
 }
 
-extern "C" void GfxAhbCrashTraceHandler(int sig, siginfo_t* info, void* ucontextRaw) {
+extern "C" inline void GfxAhbCrashTraceHandler(int sig, siginfo_t* info, void* ucontextRaw) {
     int savedErrno = errno;
     uintptr_t fault = info != nullptr ? reinterpret_cast<uintptr_t>(info->si_addr) : 0;
     uintptr_t pc = 0;
