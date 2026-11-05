@@ -2,9 +2,10 @@ name: build-ahb-shim
 
 # Builds scripts/ahb_shim.c as an arm64-v8a LD_PRELOAD shim that intercepts
 # AHardwareBuffer_acquire/release.  A NULL acquire or release is logged with the
-# caller module+offset (release-null is rate limited) and returns instead of
-# faulting in RefBase::incStrong/decStrong.  Diagnostic only; no gfxstream
-# sources are involved.
+# caller module+offset plus up to AHB_SHIM_FRAMES backtrace frames (the first 8
+# NULL events per process), then returns instead of faulting in
+# RefBase::incStrong/decStrong.  Diagnostic only; no gfxstream sources are
+# involved.
 
 on:
   workflow_dispatch:
@@ -35,9 +36,16 @@ jobs:
       - name: Build libahb_shim.so (arm64-v8a, android-33)
         run: |
           set -euo pipefail
+          UNWIND_LIB=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/aarch64/libunwind.a 2>/dev/null | head -1)
+          if [ -z "$UNWIND_LIB" ]; then
+            echo "::error::libunwind.a not found in NDK r27c"
+            exit 1
+          fi
+          echo "unwinder: $UNWIND_LIB"
           "$NDK_BIN/aarch64-linux-android33-clang" \
             -shared -fPIC -O2 -Wall -Wextra -Werror \
-            -ldl scripts/ahb_shim.c -o libahb_shim.so
+            -fno-omit-frame-pointer -funwind-tables \
+            scripts/ahb_shim.c "$UNWIND_LIB" -ldl -o libahb_shim.so
           ls -l libahb_shim.so
           file libahb_shim.so
 
@@ -69,6 +77,10 @@ jobs:
             exit 1
           fi
           echo "no malloc/printf/pthread imports"
+          echo "== v3 backtrace support =="
+          grep -q '_Unwind_Backtrace' dynsyms-all.txt
+          grep -Eq '[[:space:]]dladdr$' dynsyms-all.txt
+          echo "_Unwind_Backtrace and dladdr present"
 
       - name: Static checks (NULL paths never resolve or tail-call the real symbol)
         run: |
@@ -85,8 +97,10 @@ jobs:
             -o libahb_stub.so ../scripts/ahb_shim_test.c
           cc -O2 -Wall -Wextra -Werror -o ahb_shim_test \
             ../scripts/ahb_shim_test.c -L. -lahb_stub -Wl,-rpath,'$ORIGIN'
-          cc -shared -fPIC -O2 -Wall -Wextra -Werror -o libahb_shim_host.so \
-            ../scripts/ahb_shim.c
+          cc -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -fno-omit-frame-pointer -funwind-tables \
+            -o libahb_shim_host.so ../scripts/ahb_shim.c \
+            -Wl,--no-as-needed -lgcc_s
 
           run_case() {
             case_name="$1"
@@ -98,25 +112,57 @@ jobs:
             printf '%s\n' "$1" | grep -c "$2" || true
           }
 
-          echo "== case: NULL release must log once and never reach the real fn =="
+          echo "== case: NULL release logs caller + frames, never reaches real fn =="
           out=$(run_case null-release)
           printf '%s\n' "$out"
           test "$(count "$out" 'AHB-SHIM release-null caller=0x')" -eq 1
+          test "$(count "$out" '^#[0-9][0-9] pc=0x')" -ge 1
           test "$(count "$out" 'REAL release')" -eq 0
           printf '%s\n' "$out" | grep -q 'SUMMARY real-acquire=0 real-release=0'
 
-          echo "== case: 30x NULL release stays rate limited =="
+          echo "== case: 30x NULL release = 8 full traces + 22 summary lines =="
           out=$(run_case null-release-many)
-          lines=$(count "$out" 'AHB-SHIM release-null caller=0x')
-          echo "release-null lines: $lines"
-          test "$lines" -ge 1
-          test "$lines" -le 8
+          test "$(count "$out" 'AHB-SHIM release-null caller=0x')" -eq 8
+          test "$(count "$out" 'AHB-SHIM release-null suppressed=')" -eq 22
+          printf '%s\n' "$out" | grep -q 'AHB-SHIM release-null suppressed=22 tid='
           test "$(count "$out" 'REAL release')" -eq 0
 
-          echo "== case: NULL acquire unchanged (log once, not forwarded) =="
+          echo "== case: NULL acquire logs caller + frames, not forwarded =="
           out=$(run_case null-acquire)
+          printf '%s\n' "$out"
           test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 1
+          test "$(count "$out" '^#[0-9][0-9] pc=0x')" -ge 1
           test "$(count "$out" 'REAL acquire')" -eq 0
+
+          echo "== case: AHB_SHIM_FRAMES caps the frame dump =="
+          out=$(run_case null-acquire AHB_SHIM_FRAMES=2)
+          frames=$(count "$out" '^#[0-9][0-9] pc=0x')
+          echo "frame lines with AHB_SHIM_FRAMES=2: $frames"
+          test "$frames" -ge 1
+          test "$frames" -le 2
+          test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 1
+
+          echo "== case: AHB_SHIM_FRAMES=0 keeps only the caller line =="
+          out=$(run_case null-acquire AHB_SHIM_FRAMES=0)
+          test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 1
+          test "$(count "$out" '^#[0-9][0-9] pc=0x')" -eq 0
+
+          echo "== case: 30x NULL acquire = 8 full traces + 22 summary lines =="
+          out=$(run_case null-acquire-many)
+          test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 8
+          test "$(count "$out" 'AHB-SHIM acquire-null suppressed=')" -eq 22
+          printf '%s\n' "$out" | grep -q 'AHB-SHIM acquire-null suppressed=22 tid='
+          test "$(count "$out" 'REAL acquire')" -eq 0
+
+          echo "== case: AHB_SHIM_LOG receives the same multi-line block =="
+          log="$PWD/ahb_shim_test.log"
+          rm -f "$log"
+          out=$(run_case null-acquire AHB_SHIM_LOG="$log")
+          test "$(count "$out" 'AHB-SHIM acquire-null caller=0x')" -eq 0
+          logged=$(cat "$log")
+          test "$(count "$logged" 'AHB-SHIM acquire-null caller=0x')" -eq 1
+          test "$(count "$logged" '^#[0-9][0-9] pc=0x')" -ge 1
+          test "$(count "$logged" 'shim=v3')" -eq 1
 
           echo "== case: non-NULL adds no log by default (banner only) =="
           out=$(run_case non-null)

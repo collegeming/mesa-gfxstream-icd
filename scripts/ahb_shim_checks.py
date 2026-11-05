@@ -10,6 +10,9 @@ For both interposed symbols this asserts:
     or does an indirect 'br' tail branch,
   * the non-NULL path still tail-branches ('br') to the resolved function.
 
+It also asserts that the v3 logger path stays dlsym-free and actually uses
+_Unwind_Backtrace + dladdr for the frame dump.
+
 Usage: ahb_shim_checks.py <llvm-objdump> <libahb_shim.so>
 """
 import re
@@ -21,6 +24,11 @@ FUNCS = {
     "AHardwareBuffer_acquire": "shim_log_acquire_null",
     "AHardwareBuffer_release": "shim_log_release_null",
 }
+LOGGERS = {
+    "shim_log_acquire_null": "shim_log_null",
+    "shim_log_release_null": "shim_log_null",
+}
+FRAME_SINK = "shim_log_null"
 LABEL = re.compile(r"^([0-9a-f]+) <([^>]+)>:$")
 INSN = re.compile(r"^\s*([0-9a-f]+):\s+(.*)$")
 
@@ -93,9 +101,11 @@ def check(name, logger, insns):
         if mnemonic == "br":
             fail("%s: NULL path at 0x%x tail-branches instead of returning"
                  % (name, addr))
-    if logger not in path[-1][2]:
-        fail("%s: NULL path ends in %r, expected a branch to %s"
-             % (name, path[-1][2], logger))
+    # The NULL block must call the logger before it returns/branches away.
+    # -O2 may emit either "bl logger; ret" or a tail "b logger".
+    if not any(logger in ops for _, _, ops in path):
+        fail("%s: NULL path never calls %s (last insn %r)"
+             % (name, logger, path[-1][2]))
 
     in_path = set(path)
     if not any(entry[1] == "br" for entry in insns if entry not in in_path):
@@ -105,6 +115,35 @@ def check(name, logger, insns):
     print("OK %s: dlsym@0x%x, NULL -> 0x%x (%d insns, %s, no dlsym/br), "
           "non-NULL tail branch present"
           % (name, resolve_at, target, len(path), logger))
+
+
+def check_loggers(funcs):
+    """v3: the logging chain must not resolve dlsym and must collect frames."""
+    for logger, sink in LOGGERS.items():
+        if logger not in funcs:
+            fail("%s missing from disassembly" % logger)
+        ops_all = " ".join(ops for _, _, ops in funcs[logger])
+        if "dlsym" in ops_all:
+            fail("%s references dlsym" % logger)
+        if sink not in ops_all:
+            fail("%s does not call %s" % (logger, sink))
+
+    # -O2 may clone the static sink (shim_log_null.constprop.N); accept all
+    # of its incarnations as long as the frame-collection calls survive.
+    sinks = [name for name in funcs
+             if name == FRAME_SINK or name.startswith(FRAME_SINK + ".")]
+    if not sinks:
+        fail("%s missing from disassembly" % FRAME_SINK)
+    ops_all = " ".join(ops for name in sinks
+                       for _, _, ops in funcs[name])
+    if "dlsym" in ops_all:
+        fail("%s references dlsym" % FRAME_SINK)
+    if "_Unwind_Backtrace" not in ops_all:
+        fail("%s does not call _Unwind_Backtrace" % FRAME_SINK)
+    if "dladdr" not in ops_all:
+        fail("%s does not call dladdr" % FRAME_SINK)
+    print("OK %s (%d clone(s)): no dlsym, calls _Unwind_Backtrace and dladdr"
+          % (FRAME_SINK, len(sinks)))
 
 
 def main():
@@ -118,6 +157,7 @@ def main():
         if name not in funcs:
             fail("%s missing from disassembly" % name)
         check(name, logger, funcs[name])
+    check_loggers(funcs)
     print("static checks PASS")
 
 
