@@ -131,6 +131,14 @@ inline bool Enabled() {
     return state == 1;
 }
 
+#if defined(GFXSTREAM_AHB_CRASH_TRACE_HOST_TEST)
+// The enable decision is cached per process. A forked test child inherits the
+// parent's cache, so tests reset it after changing the environment.
+inline void ResetEnabledCacheForTest() {
+    gEnabledState.store(-1, std::memory_order_release);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Module table captured from /proc/self/maps at install time. Maps are merged
 // per file: min start is the load bias, max end bounds the address range.
