@@ -132,18 +132,25 @@ static void log_msg(int level, const char *fmt, ...)
                  names[level < 0 || level > IG_LOG_DEBUG ? IG_LOG_INFO : level],
                  msg);
     if (n > 0) {
-        if (g_logfd >= 0)
-            (void)write(g_logfd, line, (size_t)n);
-        if (g_cfg.foreground)
-            (void)write(STDERR_FILENO, line, (size_t)n);
+        ssize_t wrote;
+        if (g_logfd >= 0) {
+            wrote = write(g_logfd, line, (size_t)n);
+            (void)wrote;
+        }
+        if (g_cfg.foreground) {
+            wrote = write(STDERR_FILENO, line, (size_t)n);
+            (void)wrote;
+        }
     }
 }
 
 static void on_signal(int sig)
 {
     unsigned char c = (unsigned char)sig;
-    if (g_sigpipe[1] >= 0)
-        (void)write(g_sigpipe[1], &c, 1);
+    if (g_sigpipe[1] >= 0) {
+        ssize_t wrote = write(g_sigpipe[1], &c, 1);
+        (void)wrote;
+    }
 }
 
 static void log_once_failure(const char *path, int err)
@@ -625,6 +632,15 @@ static int try_add_device(const char *path, int *changed)
             close(fd);
             return -1;
         }
+        if (g_out[out_idx].path[0] == '\0') {
+            /* Without a published node crosvm has no way to use this device;
+             * grabbing anyway would only take input away from Android. */
+            log_msg(IG_LOG_ERROR,
+                    "device: %s uinput event node not found, not grabbing", path);
+            destroy_out(&g_out[out_idx]);
+            close(fd);
+            return -1;
+        }
         if (ioctl(fd, EVIOCGRAB, 1) < 0) {
             int err = errno;
             destroy_out(&g_out[out_idx]);
@@ -920,7 +936,9 @@ static void daemonize(void)
                 close(devnull);
         }
     }
-    (void)chdir("/");
+    if (chdir("/") != 0) {
+        /* keep the inherited cwd; only cosmetic for a daemon */
+    }
 }
 
 static void install_signals(void)
