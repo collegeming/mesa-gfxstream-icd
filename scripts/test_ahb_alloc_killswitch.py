@@ -56,17 +56,22 @@ BEGIN = "    // AHB-ALLOC-KILLSWITCH-1-BEGIN\n"
 END = "    // AHB-ALLOC-KILLSWITCH-1-END\n"
 MARKER = "AHB-ALLOC-KILLSWITCH"
 INCLUDE = '#include "ahb_alloc_off_file.h"\n'
-INCLUDE_ANCHOR = (
-    "#ifdef __ANDROID__\n"
-    "// Allocate an AHardwareBuffer matching the given image's format, extent and usage.\n"
-)
-INCLUDE_BLOCK = (
-    "#ifdef __ANDROID__\n"
-    + INCLUDE
-    + "// Allocate an AHardwareBuffer matching the given image's format, extent and usage.\n"
-)
-PATH_CALL = "gfxstream::ahb_alloc_killswitch::OffFilePath()"
-DECISION_CALL = "gfxstream::ahb_alloc_killswitch::IsOff(ahbOffFile)"
+INCLUDE_ANCHOR = """\
+#include <vulkan/vulkan.h>
+
+namespace gfxstream::host::vk {
+"""
+INCLUDE_BLOCK = """\
+#include <vulkan/vulkan.h>
+
+#ifdef __ANDROID__
+#include "ahb_alloc_off_file.h"
+#endif
+
+namespace gfxstream::host::vk {
+"""
+PATH_CALL = "::gfxstream::ahb_alloc_killswitch::OffFilePath()"
+DECISION_CALL = "::gfxstream::ahb_alloc_killswitch::IsOff(ahbOffFile)"
 ALLOC = "AHardwareBuffer_allocate(&desc, &ahb)"
 ALLOC_FN = "static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {"
 FIRST_FN = "static AHardwareBuffer* allocateAhbFirstMemory(VkDeviceSize size) {"
@@ -240,12 +245,15 @@ one(decoder, "if (createRes != VK_SUCCESS) return createRes;", "on_vkCreateImage
 # 5. Patch script: unique anchors, pure insertion, idempotent, no write on rejection.
 # ---------------------------------------------------------------------------
 OPS_FIXTURE = """// fixture: minimal allocAhb anchor
+#include <vulkan/vulkan.h>
+
+namespace gfxstream::host::vk {
 #ifdef __ANDROID__
-// Allocate an AHardwareBuffer matching the given image's format, extent and usage.
 static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {
     return nullptr;
 }
 #endif
+}
 """
 
 DECODER_FIXTURE = """// fixture: minimal AHB-first anchor
@@ -293,9 +301,9 @@ with tempfile.TemporaryDirectory() as tmp:
     b = patched.index(BEGIN)
     e = patched.index(END) + len(END)
     stripped = patched[:b] + patched[e:]
-    stripped = stripped.replace(INCLUDE, "", 1)
+    stripped = stripped.replace(INCLUDE_BLOCK, INCLUDE_ANCHOR, 1)
     assert stripped == OPS_FIXTURE, (
-        "the patch changed more than the include and the guard block; "
+        "the patch changed more than the include block and the guard block; "
         "the file-absent path would not be byte-identical to the baseline")
 
     stable = (digest(patched_ops), digest(patched_decoder), digest(patched_header))
@@ -307,7 +315,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
 with tempfile.TemporaryDirectory() as tmp:
     fixture = Path(tmp)
-    make_fixture(fixture, ops_text='#ifdef __ANDROID__\n// no allocAhb anchor\n#endif\n')
+    make_fixture(fixture, ops_text=INCLUDE_ANCHOR + "// no allocAhb anchor\n")
     before = {p: digest(p) for p in (
         fixture / "host" / "vulkan" / "vk_common_operations.cpp",
         fixture / "host" / "vulkan" / "vk_decoder_global_state.cpp")}

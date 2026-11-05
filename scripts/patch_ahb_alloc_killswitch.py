@@ -110,15 +110,23 @@ inline bool IsOff(const char* path) {
 """
 
 INCLUDE = '#include "ahb_alloc_off_file.h"\n'
-INCLUDE_ANCHOR = (
-    "#ifdef __ANDROID__\n"
-    "// Allocate an AHardwareBuffer matching the given image's format, extent and usage.\n"
-)
-INCLUDE_BLOCK = (
-    "#ifdef __ANDROID__\n"
-    + INCLUDE
-    + "// Allocate an AHardwareBuffer matching the given image's format, extent and usage.\n"
-)
+# The file opens namespace gfxstream::host::vk at the top and puts later platform
+# includes inside it. The helper must be included at global scope, before that
+# namespace, so gfxstream::ahb_alloc_killswitch is the global namespace.
+INCLUDE_ANCHOR = """\
+#include <vulkan/vulkan.h>
+
+namespace gfxstream::host::vk {
+"""
+INCLUDE_BLOCK = """\
+#include <vulkan/vulkan.h>
+
+#ifdef __ANDROID__
+#include "ahb_alloc_off_file.h"
+#endif
+
+namespace gfxstream::host::vk {
+"""
 BEGIN = "    // AHB-ALLOC-KILLSWITCH-1-BEGIN\n"
 END = "    // AHB-ALLOC-KILLSWITCH-1-END\n"
 GUARD = (
@@ -128,8 +136,8 @@ GUARD = (
     // created or removed while crosvm is running. When stat() fails (missing,
     // unreadable, or not a regular file) this is a no-op and the allocation below is
     // unchanged; the startup AHB-first helper does not use this switch.
-    const char* ahbOffFile = gfxstream::ahb_alloc_killswitch::OffFilePath();
-    if (gfxstream::ahb_alloc_killswitch::IsOff(ahbOffFile)) {
+    const char* ahbOffFile = ::gfxstream::ahb_alloc_killswitch::OffFilePath();
+    if (::gfxstream::ahb_alloc_killswitch::IsOff(ahbOffFile)) {
         GFXSTREAM_WARNING("GFXSTREAM_AHB_ALLOC_DISABLED file=%s", ahbOffFile);
         return nullptr;
     }
