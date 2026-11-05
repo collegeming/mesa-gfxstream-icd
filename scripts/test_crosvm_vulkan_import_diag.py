@@ -58,9 +58,11 @@ assert 'DeviceId {' in vulkan_arm, 'the VulkanInfo construction disappeared'
 assert vulkan_arm.count('device_id,') >= 1
 
 # 5. the feature probe is wired into both cargo invocations (when the workflow is supplied).
+# Optional trailing features (audio/audio_aaudio here, android_display elsewhere) are allowed;
+# they must not hide vulkano or vnc.
 if workflow:
-    assert workflow.count(",vulkano,vnc'") == 2, workflow.count(",vulkano,vnc'")
-    assert workflow.count("--features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc'") == 2
+    assert workflow.count(",vulkano,vnc") == 2, workflow.count(",vulkano,vnc")
+    assert workflow.count("--features 'gpu,gfxstream,net,config-file,qcow,balloon,vulkano,vnc") == 2
 
 report = (
     'PASS three import failures distinguished: no-backend / no-vulkano / import-failed\n'
