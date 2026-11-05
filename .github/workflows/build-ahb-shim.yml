@@ -80,15 +80,17 @@ jobs:
           # appear.  A dynsym reference would mean libunwind.a got linked and
           # brought malloc/stdio/pthread_rwlock in.
           grep -aq '_Unwind_Backtrace' libahb_shim.so
-          if grep -q '_Unwind_Backtrace' dynsyms-all.txt; then
-            echo "::error::_Unwind_Backtrace must not be a link-time symbol"
+          grep -aq '_Unwind_GetIP' libahb_shim.so
+          if grep -Eq '_Unwind_(Backtrace|GetIP)' dynsyms-all.txt; then
+            echo "::error::unwinder symbols must not be link-time references"
             exit 1
           fi
           grep -Eq '[[:space:]]dladdr(@|$)' dynsyms-all.txt
           LIBC_STUB=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android" -maxdepth 2 -name libc.so | sort | tail -1)
           echo "libc stub: $LIBC_STUB"
           "$NDK_BIN/llvm-nm" -D "$LIBC_STUB" | grep -q '_Unwind_Backtrace'
-          echo "_Unwind_Backtrace and dladdr present; bionic provides the unwinder"
+          "$NDK_BIN/llvm-nm" -D "$LIBC_STUB" | grep -q '_Unwind_GetIP'
+          echo "unwinder names and dladdr present; bionic exports both entries"
 
       - name: Static checks (NULL paths never resolve or tail-call the real symbol)
         run: |
