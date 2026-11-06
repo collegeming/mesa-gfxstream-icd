@@ -61,15 +61,21 @@ if delta:
     print('Unexpected config drift:',delta)
     raise SystemExit(1)
 PY
+cp .config /build/out/prebuild.config
 release=$(make -s kernelrelease)
 test "$release" = 7.3.0-1-aarch64-ARCH
 make -j"$(nproc)" vmlinux
 test -s vmlinux.symvers
+# vmlinux alone does not generate scripts/module.lds, a mandatory prerequisite
+# of the .ko implicit link rule. Prepare external-module build support explicitly.
+make modules_prepare
+test -s scripts/module.lds
 # All virtio-snd prerequisites are built in. This is the real modpost export
 # table from the matching vmlinux, not a fabricated or mismatched symbol file.
 cp vmlinux.symvers Module.symvers
 cp -a sound/virtio /build/virtio-snd
 make -j"$(nproc)" M=/build/virtio-snd CONFIG_SND_VIRTIO=m modules
+cmp .config /build/out/prebuild.config
 install -m644 /build/virtio-snd/virtio_snd.ko /build/out/virtio_snd.ko
 cp .config /build/out/build.config
 cp /build/control/guest.config /build/out/guest.config
