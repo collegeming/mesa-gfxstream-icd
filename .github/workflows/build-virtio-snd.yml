@@ -45,11 +45,23 @@ jobs:
           sudo mount --rbind /sys "$ROOT/sys"
           sudo mount --make-rslave "$ROOT/sys"
           printf 'BUILD_ROOT=%s\n' "$ROOT" >> "$GITHUB_ENV"
+      - name: Restore verified package downloads
+        id: package-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/arch-build/var/cache/pacman/pkg
+          key: arch-arm-gcc16.1.1-ld2.46-alarm2b9d658270-config-d71b41fd-${{ hashFiles('audio-module/build-virtio-snd.sh') }}
       - name: Build matching builtin exports and module only
         shell: bash
         run: |
           set -euo pipefail
           sudo chroot "$BUILD_ROOT" /bin/bash /build/control/build-virtio-snd.sh
+      - name: Save package downloads
+        if: always() && steps.package-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/arch-build/var/cache/pacman/pkg
+          key: ${{ steps.package-cache.outputs.cache-primary-key }}
       - name: Collect module and verification evidence
         if: always()
         shell: bash
