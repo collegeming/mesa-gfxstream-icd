@@ -25,6 +25,7 @@ jobs:
             https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz
           sha256sum "$RUNNER_TEMP/rootfs-download/rootfs.tar.gz"
           sudo tar -xpf "$RUNNER_TEMP/rootfs-download/rootfs.tar.gz" -C "$ROOT"
+          sudo chown root:root "$ROOT"
           sudo mkdir -p "$ROOT/build/control" "$ROOT/build/out" "$ROOT/host-aria" "$ROOT/usr/local/bin"
           sudo cp audio-module/* "$ROOT/build/control/"
           # Bootstrap the downloader from the runner without running any build locally.

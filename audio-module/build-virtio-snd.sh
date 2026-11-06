@@ -46,6 +46,8 @@ printf '%s\n' -aarch64 > localversion.20-pkgname
 export ARCH=arm64
 export CC=aarch64-unknown-linux-gnu-gcc
 command -v "$CC"
+# Kbuild assigns CC itself: an environment variable alone is not sufficient.
+make() { command make CC="$CC" "$@"; }
 make olddefconfig
 # Compiler-derived comments may differ, but no real kernel option may change.
 python -I - /build/control/guest.config .config <<'PY'
