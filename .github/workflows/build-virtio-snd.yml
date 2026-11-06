@@ -1,0 +1,64 @@
+name: Arch 7.3 current-kernel virtio-snd
+on:
+  push:
+    branches: [diagnostic/arch-7.3-virtio-snd]
+    paths: ['.github/workflows/build-virtio-snd.yml', 'audio-module/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  module:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated Arch ARM build root
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y aria2
+          ROOT="$RUNNER_TEMP/arch-build"
+          mkdir -p "$RUNNER_TEMP/rootfs-download" "$ROOT"
+          aria2c --console-log-level=warn --summary-interval=30 -x 8 -s 8 --max-tries=5 --retry-wait=3 \
+            --dir="$RUNNER_TEMP/rootfs-download" --out=rootfs.tar.gz \
+            https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz
+          sha256sum "$RUNNER_TEMP/rootfs-download/rootfs.tar.gz"
+          sudo tar -xpf "$RUNNER_TEMP/rootfs-download/rootfs.tar.gz" -C "$ROOT"
+          sudo mkdir -p "$ROOT/build/control" "$ROOT/build/out" "$ROOT/host-aria" "$ROOT/usr/local/bin"
+          sudo cp audio-module/* "$ROOT/build/control/"
+          # Bootstrap the downloader from the runner without running any build locally.
+          sudo cp /usr/bin/aria2c "$ROOT/host-aria/"
+          ldd /usr/bin/aria2c | grep -oE '/[^ ]+' | while read -r lib; do
+            sudo cp -L "$lib" "$ROOT/host-aria/"
+          done
+          printf '#!/bin/sh\nexec /host-aria/ld-linux-aarch64.so.1 --library-path /host-aria /host-aria/aria2c "$@"\n' | sudo tee "$ROOT/usr/local/bin/aria2c" >/dev/null
+          sudo chmod +x "$ROOT/usr/local/bin/aria2c"
+          sudo cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf"
+          sudo mount -t proc proc "$ROOT/proc"
+          sudo mount --rbind /dev "$ROOT/dev"
+          sudo mount --make-rslave "$ROOT/dev"
+          sudo mount --rbind /sys "$ROOT/sys"
+          sudo mount --make-rslave "$ROOT/sys"
+          printf 'BUILD_ROOT=%s\n' "$ROOT" >> "$GITHUB_ENV"
+      - name: Build matching builtin exports and module only
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo chroot "$BUILD_ROOT" /bin/bash /build/control/build-virtio-snd.sh
+      - name: Collect module and verification evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifact
+          if test -d "$RUNNER_TEMP/arch-build/build/out"; then
+            sudo cp -a "$RUNNER_TEMP/arch-build/build/out/." artifact/
+            sudo chown -R "$(id -u):$(id -g)" artifact
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arch-7.3.0-1-aarch64-virtio-snd-${{ github.run_id }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14
