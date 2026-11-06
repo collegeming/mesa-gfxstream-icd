@@ -12,7 +12,11 @@ printf 'Server = %s/$arch/$repo\n' "$mirror" > /etc/pacman.d/mirrorlist
 sed -i '/^\[options\]$/a XferCommand = /usr/local/bin/aria2c --console-log-level=warn --summary-interval=0 --allow-overwrite=true --auto-file-renaming=false --dir=/ --out %o %u' /etc/pacman.conf
 pacman-key --init
 pacman-key --populate archlinuxarm
-pacman -Syu --noconfirm --needed base-devel bc openssl libelf kmod python git
+# libalpm cannot map the host mount table to a plain chroot's cachedir.
+# Check real free space explicitly rather than using that chroot-incompatible check.
+test "$(df -Pk /build | awk 'NR==2 {print $4}')" -gt 10000000
+sed -i 's/^CheckSpace$/# CheckSpace (host df checked above)/' /etc/pacman.conf
+pacman -Syu --noconfirm --needed --ignore 'linux-aarch64,linux-firmware,linux-firmware-*' base-devel bc openssl libelf kmod python git
 # Refuse an unreviewed compiler change instead of silently drifting the kernel config.
 test "$(gcc -dumpfullversion)" = 16.1.1
 gcc --version
