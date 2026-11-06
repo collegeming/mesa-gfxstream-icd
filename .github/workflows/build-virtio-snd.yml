@@ -34,6 +34,9 @@ jobs:
           done
           printf '#!/bin/sh\nexec /host-aria/ld-linux-aarch64.so.1 --library-path /host-aria /host-aria/aria2c "$@"\n' | sudo tee "$ROOT/usr/local/bin/aria2c" >/dev/null
           sudo chmod +x "$ROOT/usr/local/bin/aria2c"
+          # Rootfs resolv.conf may be an absolute systemd symlink; replace it
+          # before copying so the chroot actually receives the resolver file.
+          sudo rm -f "$ROOT/etc/resolv.conf"
           sudo cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf"
           sudo mount -t proc proc "$ROOT/proc"
           sudo mount --rbind /dev "$ROOT/dev"
