@@ -9,7 +9,7 @@ fetch() { aria2c --console-log-level=warn --summary-interval=0 --max-tries=5 --r
 mirror=https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm
 printf 'Server = %s/$arch/$repo\n' "$mirror" > /etc/pacman.d/mirrorlist
 # Package downloads also use aria2. No guest filesystem is mounted here.
-sed -i '/^\[options\]$/a XferCommand = /usr/local/bin/aria2c --console-log-level=warn --summary-interval=0 --allow-overwrite=true --auto-file-renaming=false --out %o %u' /etc/pacman.conf
+sed -i '/^\[options\]$/a XferCommand = /usr/local/bin/aria2c --console-log-level=warn --summary-interval=0 --allow-overwrite=true --auto-file-renaming=false --dir=/ --out %o %u' /etc/pacman.conf
 pacman-key --init
 pacman-key --populate archlinuxarm
 pacman -Syu --noconfirm --needed base-devel bc openssl libelf kmod python git
