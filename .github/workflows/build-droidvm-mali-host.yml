@@ -401,6 +401,13 @@ jobs:
           python3 -I ci/scripts/patch_vkimage_unbox_nofatal.py source
           grep -q 'unregistered guest handle, returning' source/host/vulkan/vulkan_boxed_handles.cpp
           cp ci/scripts/patch_vkimage_unbox_nofatal.py out/
+          python3 -I ci/scripts/patch_host_unbox_trace.py source
+          grep -q 'GFXDIAG: unbox-miss' source/host/vulkan/vulkan_boxed_handles.cpp
+          grep -q 'GFXDIAG: image-create' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'GFXDIAG: image-destroy' source/host/vulkan/vk_decoder.cpp
+          grep -q 'GFXDIAG: device-lost' source/host/vulkan/vk_decoder_global_state.cpp
+          git -C source add -N host/vulkan/gfxdiag_unbox_trace.h
+          cp ci/scripts/patch_host_unbox_trace.py source/host/vulkan/gfxdiag_unbox_trace.h out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
@@ -528,7 +535,8 @@ jobs:
                   "Bounded Buffer/BufferVk create diagnostics plus default-off GFXSTREAM_NIRI_BUFFER_NO_EXTERNAL external-buffer suppression experiment; no default behavior change",
                   "AndroidAHB mode no longer attaches external buffer create info or exports AHB for plain VkBuffers; image/ColorBuffer AHB export remains",
                   "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
-                  "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes"
+                  "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes",
+                  "Diagnostic-only GFXDIAG host tracing: unbox-miss type/handle/opcode/live-boxed-handle count, GFXSTREAM_TRACE_IMAGES-gated image create/destroy trace, and device-lost opcode; no behavior, driver-call or return-value change"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
