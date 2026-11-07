@@ -419,6 +419,16 @@ jobs:
           ! grep -q 'Using AHB memory type bits for import' source/host/vulkan/vk_common_operations.cpp
           ! grep -q 'combinedBits = ahbProps.memoryTypeBits;' source/host/vulkan/vk_common_operations.cpp
           cp ci/scripts/patch_host_ahb_import_guard.py out/
+          python3 -I ci/scripts/patch_host_p2d_image_dmabuf.py source
+          grep -q 'GFXDIAG: D1 P2D-IMAGE-EXT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D1 P2D-DMABUF-EXPORT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXSTREAM_CB_EXTERNAL_MODE' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'p2dExternalMode' source/host/vulkan/vk_common_operations.h
+          grep -q 'GFXDIAG: D1 CIB1-IMAGE-EXT' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'GFXDIAG: D1 ZERO-SIZE-ALLOW' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'getDefaultExternalMemoryHandleType' source/host/vulkan/vk_common_operations.cpp
+          cp ci/scripts/patch_host_p2d_image_dmabuf.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
@@ -548,7 +558,8 @@ jobs:
                   "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
                   "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes",
                   "Diagnostic-only GFXDIAG host tracing: unbox-miss type/handle/opcode/live-boxed-handle count, GFXSTREAM_TRACE_IMAGES-gated image create/destroy trace, and device-lost opcode; no behavior, driver-call or return-value change",
-                  "P2c experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release, no import) but keep the ColorBuffer by allocating on the image's own memory type with ahbProps.allocationSize, and skip the export switch explicitly because the memory has no AHB backing (handleInfo empty); GFXDIAG lines record both masks, ColorBuffer/VkImage handles, final index and sizes; supersedes the second entry for this build. Print-only P3 diagnostics gated by GFXSTREAM_BIND_DIAG=1 print image requirements bits, memory type index/bit, import stream type, AHB pointer and sizes at ColorBuffer bind and at guest image bind; no return-value or driver-call change"
+                  "P2c experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release, no import) but keep the ColorBuffer by allocating on the image's own memory type with ahbProps.allocationSize, and skip the export switch explicitly because the memory has no AHB backing (handleInfo empty); GFXDIAG lines record both masks, ColorBuffer/VkImage handles, final index and sizes; supersedes the second entry for this build. Print-only P3 diagnostics gated by GFXSTREAM_BIND_DIAG=1 print image requirements bits, memory type index/bit, import stream type, AHB pointer and sizes at ColorBuffer bind and at guest image bind; no return-value or driver-call change",
+                  "D1 experiment: ColorBuffers take a dma-buf contract instead of the platform AHB external type. GFXSTREAM_CB_EXTERNAL_MODE (dmabuf default, ahb = P2c, none) selects per ColorBuffer; dmabuf images declare VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, skip the AHB allocate/import arm, chain VkExportMemoryAllocateInfo{DMA_BUF}, export with vkGetMemoryFdKHR and store handleInfo={fd, MEM_DMABUF}; export failure keeps the ColorBuffer alive with an empty handle. An unsupported dma-buf image or zero image memory requirements recreates the image without an external type instead of failing startup. CIB1 accepts a MEM_DMABUF ColorBuffer handle, queries the driver with the guest's handle type and creates the bridge image with DMA_BUF; the zero-size guest import whitelist also accepts a non-empty MEM_DMABUF handle. Supersedes the AHB ColorBuffer contract while GFXSTREAM_CB_EXTERNAL_MODE=dmabuf"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
