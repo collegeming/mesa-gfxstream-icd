@@ -1,0 +1,64 @@
+name: build-gfxstream-vkimage-fix
+
+# Builds collegeming/gfxstream at the VkImage-unbox fix commit
+# (6092f6e3f251fd38fe9d3952b484bd558acd234b). Actions is disabled
+# repository-wide on the gfxstream fork, so the build is hosted here while
+# checking out the exact gfxstream commit via codeload. Build-only: no deploy.
+
+on:
+  push:
+    branches: [ci/vkimage-unbox-nofatal]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download gfxstream fix commit
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o /tmp/gfxstream.tar.gz \
+            https://codeload.github.com/collegeming/gfxstream/tar.gz/6092f6e3f251fd38fe9d3952b484bd558acd234b
+          mkdir -p source
+          tar -xzf /tmp/gfxstream.tar.gz -C source --strip-components=1
+          test -f source/host/vulkan/vulkan_boxed_handles.cpp
+
+      - name: Fetch Android NDK r27c
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o /tmp/ndk.zip \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME"
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: Configure (CMake + NDK toolchain)
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-33 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STANDALONE=ON
+
+      - name: Build gfxstream_backend
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cmake --build build-android --target gfxstream_backend -j"$(nproc)"
+
+      - name: Show artifact
+        run: find source/build-android -name 'libgfxstream_backend.so' -exec ls -l {} \;
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libgfxstream_backend-android-arm64
+          path: source/build-android/**/libgfxstream_backend.so
+          if-no-files-found: error
+          retention-days: 14
