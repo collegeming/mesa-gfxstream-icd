@@ -411,6 +411,10 @@ jobs:
           cp ci/scripts/patch_host_unbox_trace.py source/host/vulkan/gfxdiag_unbox_trace.h out/
           python3 -I ci/scripts/patch_host_ahb_import_guard.py source
           grep -q 'GFXDIAG: reject AHB import' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: P2C non-exportable alloc' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: P2C skip-export' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: P3 CB-BIND' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: P3 GUEST-BIND' source/host/vulkan/vk_decoder_global_state.cpp
           grep -q 'No common memory type for AHB' source/host/vulkan/vk_common_operations.cpp
           ! grep -q 'Using AHB memory type bits for import' source/host/vulkan/vk_common_operations.cpp
           ! grep -q 'combinedBits = ahbProps.memoryTypeBits;' source/host/vulkan/vk_common_operations.cpp
@@ -544,7 +548,7 @@ jobs:
                   "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
                   "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes",
                   "Diagnostic-only GFXDIAG host tracing: unbox-miss type/handle/opcode/live-boxed-handle count, GFXSTREAM_TRACE_IMAGES-gated image create/destroy trace, and device-lost opcode; no behavior, driver-call or return-value change",
-                  "P2 experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release + non-exportable fallback) and log a GFXDIAG line with both masks, ColorBuffer/VkImage handles and sizes, instead of forcing the AHB memory type; supersedes the second entry for this build"
+                  "P2c experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release, no import) but keep the ColorBuffer by allocating on the image's own memory type with ahbProps.allocationSize, and skip the export switch explicitly because the memory has no AHB backing (handleInfo empty); GFXDIAG lines record both masks, ColorBuffer/VkImage handles, final index and sizes; supersedes the second entry for this build. Print-only P3 diagnostics gated by GFXSTREAM_BIND_DIAG=1 print image requirements bits, memory type index/bit, import stream type, AHB pointer and sizes at ColorBuffer bind and at guest image bind; no return-value or driver-call change"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
