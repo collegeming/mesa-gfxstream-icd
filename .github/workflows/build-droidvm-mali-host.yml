@@ -429,6 +429,16 @@ jobs:
           grep -q 'VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT' source/host/vulkan/vk_common_operations.cpp
           grep -q 'getDefaultExternalMemoryHandleType' source/host/vulkan/vk_common_operations.cpp
           cp ci/scripts/patch_host_p2d_image_dmabuf.py out/
+          python3 -I ci/scripts/patch_host_cb_dmabuf_modifier.py source
+          grep -q 'GFXDIAG: D4B P2D-IMAGE-MOD' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4B P2D-IMAGE-BITS' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4B P2D-DMABUF-EXPORT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4B CIB1-IMAGE-MOD' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'VkImageDrmFormatModifierListCreateInfoEXT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'VkImageDrmFormatModifierListCreateInfoEXT' source/host/vulkan/vk_decoder_global_state.cpp
+          grep -q 'DRM_FORMAT_MOD_LINEAR' source/host/vulkan/vk_common_operations.cpp
+          [ "$(grep -c 'imageCi->tiling = VK_IMAGE_TILING_OPTIMAL' source/host/vulkan/vk_common_operations.cpp)" = "2" ]
+          cp ci/scripts/patch_host_cb_dmabuf_modifier.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
