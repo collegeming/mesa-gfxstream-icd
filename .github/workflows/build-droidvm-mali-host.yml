@@ -415,6 +415,18 @@ jobs:
           ! grep -q 'Using AHB memory type bits for import' source/host/vulkan/vk_common_operations.cpp
           ! grep -q 'combinedBits = ahbProps.memoryTypeBits;' source/host/vulkan/vk_common_operations.cpp
           cp ci/scripts/patch_host_ahb_import_guard.py out/
+          python3 -I ci/scripts/patch_host_ahb_failsafe.py source
+          grep -q 'AHB-PROPS cb=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-IMAGE-BITS cb=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-MEMTYPE-DISJOINT cb=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-FAILSAFE-SKIP cb=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-FAILSAFE-NO-EXPORT cb=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'AHB-MATRIX fmt=%u' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXSTREAM_AHB_PROBE_MATRIX' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'bool ahbImportUnavailable = false;' source/host/vulkan/vk_common_operations.h
+          ! grep -q 'combinedBits = ahbProps.memoryTypeBits;' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'Encountered device lost.' source/host/vulkan/vk_decoder_global_state.cpp
+          cp ci/scripts/patch_host_ahb_failsafe.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
@@ -544,7 +556,8 @@ jobs:
                   "AndroidAHB mode exports plain VkBuffer memory as a dma-buf (buffer create info and allocation export info use DMA_BUF) so VkImportBufferGOOGLE has a handle to duplicate; image/ColorBuffer AHB path unchanged and a failed buffer export keeps the old allocation behavior",
                   "Default-off GFXSTREAM_IV_DIAG bounded image-view/image-view-destroy/image-destroy/device-destroy/memory-free handle and metadata diagnostics; no extra driver calls, stores or return-value changes",
                   "Diagnostic-only GFXDIAG host tracing: unbox-miss type/handle/opcode/live-boxed-handle count, GFXSTREAM_TRACE_IMAGES-gated image create/destroy trace, and device-lost opcode; no behavior, driver-call or return-value change",
-                  "P2 experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release + non-exportable fallback) and log a GFXDIAG line with both masks, ColorBuffer/VkImage handles and sizes, instead of forcing the AHB memory type; supersedes the second entry for this build"
+                  "P2 experiment: when the AHB and image memoryTypeBits intersect to zero, refuse the AHB import (AHardwareBuffer_release + non-exportable fallback) and log a GFXDIAG line with both masks, ColorBuffer/VkImage handles and sizes, instead of forcing the AHB memory type; supersedes the second entry for this build",
+                  "E1 AHB fail-safe: probe the gralloc AHB for the image shape (AHB-PROPS/AHB-IMAGE-BITS), and when its memoryTypeBits do not intersect the image requirements (AHB-MEMTYPE-DISJOINT) recreate the image without the AHB external type, allocate plain memory and skip the AHB/export calls so the ColorBuffer is created without an external handle; default-off GFXSTREAM_AHB_PROBE_MATRIX=1 prints a bounded AHB format/usage/extent matrix (AHB-MATRIX)"
               ],
               "runtime_feature_override_example": "GFXSTREAM_RENDERER_FEATURES=VulkanAllocateHostVisibleAsUdmabuf:enabled,ExternalBlob:enabled",
               "generated_wire_code": "Unchanged from pinned gfxstream source; Vulkan-Headers replacement does not regenerate cereal wire codecs",
