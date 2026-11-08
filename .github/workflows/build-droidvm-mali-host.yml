@@ -439,6 +439,21 @@ jobs:
           grep -q 'DRM_FORMAT_MOD_LINEAR' source/host/vulkan/vk_common_operations.cpp
           [ "$(grep -c 'imageCi->tiling = VK_IMAGE_TILING_OPTIMAL' source/host/vulkan/vk_common_operations.cpp)" = "2" ]
           cp ci/scripts/patch_host_cb_dmabuf_modifier.py out/
+          python3 -I ci/scripts/patch_host_cb_export_probe.py source
+          grep -q 'GFXDIAG: D4BX EXTPROPS' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4BX MEMTYPES' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4BX MEMTYPE-PICK' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4BX MEMTYPE-OVERRIDE' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXDIAG: D4BX ALLOC' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXSTREAM_CB_EXPORT_MODE' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'GFXSTREAM_CB_MEMTYPE_INDEX' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME' source/host/vulkan/vk_common_operations.cpp
+          grep -q 'p2dHandleType' source/host/vulkan/vk_common_operations.h
+          grep -q 'STREAM_HANDLE_TYPE_MEM_OPAQUE_FD' source/host/vulkan/vk_decoder_global_state.cpp
+          [ "$(grep -c 'STREAM_HANDLE_TYPE_MEM_OPAQUE_FD' source/host/vulkan/vk_decoder_global_state.cpp)" = "5" ]
+          [ "$(grep -c 'GFXDIAG: D4BX EXPORT ok=' source/host/vulkan/vk_common_operations.cpp)" = "2" ]
+          cp ci/scripts/patch_host_cb_export_probe.py out/
           git -C source diff --check
           git -C source diff --binary -- . ':!third_party/vulkan_headers' > out/gfxstream-android-mali.patch
           cp ci/scripts/*classic_image_bridge* out/
