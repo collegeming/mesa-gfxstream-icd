@@ -26,7 +26,11 @@ def main() -> None:
     for rs in root.rglob("*.rs"):
         text = rs.read_text(errors="ignore")
         for match in PATTERN.finditer(text):
-            target = (rs.parent / match.group(1)).resolve()
+            raw = match.group(1)
+            # Skip non-literal artifacts (format strings, macro examples) such as "jail/{}".
+            if "{" in raw or "}" in raw:
+                continue
+            target = (rs.parent / raw).resolve()
             if not target.exists() and root in target.parents:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"\x00")
