@@ -115,8 +115,11 @@ jobs:
           # apex inputs are tolerated; the binary itself must exist or the step below fails.
           ALLOW_MISSING_DEPENDENCIES=true SOONG_ALLOW_MISSING_DEPENDENCIES=true \
             TARGET_BUILD_UNBUNDLED=true m crosvm -j2 2>&1 | tee "$GITHUB_WORKSPACE/soong-crosvm.log" || true
-          find out -type f -name crosvm -perm -u+x -print
-          test -n "$(find out -type f -name crosvm -perm -u+x -print -quit)"
+          # The minimal manifest cannot package the com.android.virt apex: it lacks
+          # android_bootloader_crosvm_aarch64 ("module com.android.virt missing dependencies").
+          # The linked crosvm binary is produced before that packaging step, so list every
+          # candidate and let the Collect step pick the AArch64 ELF.
+          find out -type f -name crosvm -print | tee "$GITHUB_WORKSPACE/crosvm-candidates.txt" || true
           free -h
           df -h /
       - name: Collect candidate
@@ -125,11 +128,19 @@ jobs:
           cd "$GITHUB_WORKSPACE/aosp"
           mkdir -p "$GITHUB_WORKSPACE/out"
           pick=""
+          pick_size=0
           while IFS= read -r f; do
-            if readelf -h "$f" | grep -q 'AArch64'; then pick="$f"; break; fi
-          done < <(find out -type f -name crosvm -perm -u+x)
-          test -n "$pick"
-          echo "picked: $pick"
+            if readelf -h "$f" 2>/dev/null | grep -q 'AArch64'; then
+              sz=$(stat -c %s "$f")
+              if [ "$sz" -gt "$pick_size" ]; then pick="$f"; pick_size=$sz; fi
+            fi
+          done < <(find out -type f -name crosvm)
+          if [ -z "$pick" ]; then
+            echo "no AArch64 crosvm produced; build tail:"
+            tail -100 "$GITHUB_WORKSPACE/soong-crosvm.log" || true
+            exit 1
+          fi
+          echo "picked: $pick ($pick_size bytes)" | tee "$GITHUB_WORKSPACE/picked.txt"
           cp "$pick" "$GITHUB_WORKSPACE/out/crosvm"
           readelf -h -d "$GITHUB_WORKSPACE/out/crosvm" > "$GITHUB_WORKSPACE/out/crosvm-elf.txt"
           (cd "$GITHUB_WORKSPACE/out" && sha256sum crosvm > SHA256SUMS)
@@ -147,6 +158,8 @@ jobs:
             crosvm-commit.txt
             virglrenderer-commit.txt
             soong-crosvm.log
+            crosvm-candidates.txt
+            picked.txt
           if-no-files-found: error
 
   # Host-side regression test for the changed function. Runs on the same file content as the
