@@ -1,0 +1,187 @@
+name: build-crosvm-arena-remove-writable
+# Candidate-only build. Nothing here deploys to a device.
+#
+# Patch under test: MemoryMappingArena::remove() fills a removed sub-range with an anonymous
+# PRIVATE READ-WRITE mapping instead of PROT_READ. The virtio-gpu shared-memory BAR is one KVM
+# memslot, so a read-only fill makes a guest write take a stage-2 permission fault that arm64 KVM
+# resolves as -EFAULT from KVM_RUN (kvm_s2_fault_pin_pfn -> __kvm_faultin_pfn ->
+# KVM_PFN_ERR_RO_FAULT); crosvm's vCPU loop then exits the VM with
+# "vcpu hit unknown error: Bad address (os error 14)".
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/crosvm-arena-remove-writable]
+    paths:
+      - '.github/workflows/build-crosvm-arena-remove-writable.yml'
+      - 'scripts/patch_crosvm_arena_remove_writable.py'
+permissions:
+  contents: read
+concurrency:
+  group: crosvm-arena-remove-writable
+  cancel-in-progress: false
+jobs:
+  # Same source lineage as the deployed runtime: Droid-VM/crosvm via the minimal manifest, built
+  # with soong against the Android arm64 target (the binary the DroidVM app execs).
+  android-soong:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - name: Checkout patch scripts
+        uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          set -eux
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/lib/jvm /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell
+          sudo apt-get clean
+          sudo docker image prune -a -f || true
+          df -h /
+      - name: Create swap headroom
+        run: |
+          set -eux
+          sudo fallocate -l 8G /swapfile-extra || sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=8192
+          sudo chmod 600 /swapfile-extra
+          sudo mkswap /swapfile-extra || true
+          sudo swapon /swapfile-extra || true
+          free -h
+          df -h /
+      - name: Install repo tool
+        run: |
+          set -eux
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name "crosvm-ci"
+          git config --global user.email "crosvm-ci@users.noreply.github.com"
+          git config --global http.postBuffer 524288000
+      - name: Sync minimal AOSP (Droid-VM/crosvm, branch droidvm)
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/aosp"
+          cd "$GITHUB_WORKSPACE/aosp"
+          repo init -u https://github.com/Droid-VM/crosvm-minimal-manifest -b droidvm -m crosvm-minimal.xml --depth 1
+          repo sync -c -j8 --no-tags --optimized-fetch --force-sync
+          if [ ! -d external/llvm-libc ]; then
+            git clone --depth 1 -b android16-qpr2-release \
+              https://android.googlesource.com/platform/external/llvm-libc external/llvm-libc
+          fi
+          # Provenance: the tree the candidate is built from.
+          git -C external/crosvm rev-parse HEAD | tee "$GITHUB_WORKSPACE/crosvm-commit.txt"
+          git -C external/virglrenderer rev-parse HEAD | tee "$GITHUB_WORKSPACE/virglrenderer-commit.txt"
+          df -h /
+      - name: Verify the crosvm module is in the synced tree
+        run: |
+          set -eux
+          test -f "$GITHUB_WORKSPACE/aosp/external/crosvm/Android.bp"
+          grep -n 'name: "crosvm"' "$GITHUB_WORKSPACE/aosp/external/crosvm/Android.bp"
+      - name: Apply arena-remove-writable patch
+        run: |
+          set -eux
+          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py "$GITHUB_WORKSPACE/aosp/external/crosvm"
+          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py "$GITHUB_WORKSPACE/aosp/external/crosvm" --check
+          git -C "$GITHUB_WORKSPACE/aosp/external/crosvm" diff --stat | tee "$GITHUB_WORKSPACE/patch-stat.txt"
+          git -C "$GITHUB_WORKSPACE/aosp/external/crosvm" diff --binary > "$GITHUB_WORKSPACE/source.patch"
+          test -s "$GITHUB_WORKSPACE/source.patch"
+      - name: Build crosvm
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          source build/envsetup.sh
+          lunch aosp_arm64 trunk_staging eng
+          free -h
+          df -h /
+          # crosvm is the module the DroidVM app execs (Android arm64 target). Missing optional
+          # apex inputs are tolerated; the binary itself must exist or the step below fails.
+          ALLOW_MISSING_DEPENDENCIES=true SOONG_ALLOW_MISSING_DEPENDENCIES=true \
+            TARGET_BUILD_UNBUNDLED=true m crosvm -j2 2>&1 | tee "$GITHUB_WORKSPACE/soong-crosvm.log" || true
+          find out -type f -name crosvm -perm -u+x -print
+          test -n "$(find out -type f -name crosvm -perm -u+x -print -quit)"
+          free -h
+          df -h /
+      - name: Collect candidate
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE/aosp"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          pick=""
+          while IFS= read -r f; do
+            if readelf -h "$f" | grep -q 'AArch64'; then pick="$f"; break; fi
+          done < <(find out -type f -name crosvm -perm -u+x)
+          test -n "$pick"
+          echo "picked: $pick"
+          cp "$pick" "$GITHUB_WORKSPACE/out/crosvm"
+          readelf -h -d "$GITHUB_WORKSPACE/out/crosvm" > "$GITHUB_WORKSPACE/out/crosvm-elf.txt"
+          (cd "$GITHUB_WORKSPACE/out" && sha256sum crosvm > SHA256SUMS)
+      - name: Upload candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-arena-writable-${{ github.run_id }}
+          path: |
+            out/
+            source.patch
+            patch-stat.txt
+            crosvm-commit.txt
+            virglrenderer-commit.txt
+            soong-crosvm.log
+          if-no-files-found: error
+
+  # Host-side regression test for the changed function. Runs on the same file content as the
+  # soong tree (the pinned production tree carries an identical base/src/sys/linux/mmap.rs).
+  host-unit-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CROSVM_COMMIT: 849e05f12d5c8d4c36af8e15763986d242cd43b5
+      MINIJAIL_COMMIT: 8330e01d0fd55dfe505890eb5f829b77ac4ca8cb
+      RUSTUP_TOOLCHAIN: 1.90.0
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout patch scripts
+        uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - name: Checkout pinned crosvm source
+        uses: actions/checkout@v4
+        with:
+          repository: collegeming/crosvm
+          ref: ${{ env.CROSVM_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Materialize minijail beside the source
+        uses: actions/checkout@v4
+        with:
+          repository: google/minijail
+          ref: ${{ env.MINIJAIL_COMMIT }}
+          path: minijail
+          persist-credentials: false
+      - name: Apply patch
+        run: |
+          set -eux
+          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py "$GITHUB_WORKSPACE/source"
+          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py "$GITHUB_WORKSPACE/source" --check
+          git -C source diff --check
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev libelf-dev libssl-dev
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup run "$RUSTUP_TOOLCHAIN" cargo --version
+      - name: Run the base arena tests
+        run: |
+          cd source
+          cargo +"$RUSTUP_TOOLCHAIN" test --locked -p base --lib -- arena_remove --nocapture 2>&1 | tee ../base-tests.log
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-arena-tests-${{ github.run_id }}
+          path: base-tests.log
+          if-no-files-found: warn
