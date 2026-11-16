@@ -82,6 +82,17 @@ jobs:
           head -5 hardware/google/gfxstream/host/vulkan/decoder_profile.cpp
           git -C hardware/google/gfxstream diff --stat | tee "$GITHUB_WORKSPACE/gfxstream-gettid-fix.txt"
           git -C hardware/google/gfxstream diff --binary > "$GITHUB_WORKSPACE/gfxstream-gettid.patch"
+      - name: Provide placeholders for missing include_bytes assets
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE/aosp"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/provide_missing_include_bytes.py" external/crosvm \
+            | tee "$GITHUB_WORKSPACE/include-bytes-placeholders.txt"
+          {
+            echo "dummy include_bytes placeholders (1 byte): KVM candidate only; Gunyah/unused prebuilt assets are not exercised"
+            cat "$GITHUB_WORKSPACE/include-bytes-placeholders.txt"
+          } > "$GITHUB_WORKSPACE/BUILD-INFO.txt"
+          cat "$GITHUB_WORKSPACE/BUILD-INFO.txt"
       - name: Verify the crosvm module is in the synced tree
         run: |
           set -eux
@@ -161,6 +172,8 @@ jobs:
             soong-crosvm.log
             crosvm-candidates.txt
             picked.txt
+            include-bytes-placeholders.txt
+            BUILD-INFO.txt
           if-no-files-found: error
 
   # Host-side regression test for the changed function. Runs on the same file content as the
