@@ -83,13 +83,13 @@ jobs:
         run: |
           set -eux
           cd "$GITHUB_WORKSPACE/aosp"
-          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py external/crosvm
-          python3 -I patch-repo/scripts/patch_crosvm_arena_remove_writable.py external/crosvm --check
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_arena_remove_writable.py" external/crosvm
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_arena_remove_writable.py" external/crosvm --check
           # Build-time only, not part of the behavior change: the candidate is the Android target
           # binary. `m crosvm` otherwise also builds the host variant, which pulls
           # hardware/google/gfxstream host/vulkan/decoder_profile.cpp and fails on this glibc
           # toolchain with "use of undeclared identifier 'gettid'". The host binary is not shipped.
-          python3 -I patch-repo/scripts/disable_crosvm_host_variant.py external/crosvm
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/disable_crosvm_host_variant.py" external/crosvm
           grep -n 'host_supported: false' external/crosvm/Android.bp | tee "$GITHUB_WORKSPACE/host-variant-disabled.txt"
           git -C "$GITHUB_WORKSPACE/aosp/external/crosvm" diff --stat | tee "$GITHUB_WORKSPACE/patch-stat.txt"
           git -C "$GITHUB_WORKSPACE/aosp/external/crosvm" diff --binary > "$GITHUB_WORKSPACE/source.patch"
