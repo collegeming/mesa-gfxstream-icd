@@ -74,6 +74,14 @@ jobs:
           git -C external/crosvm rev-parse HEAD | tee "$GITHUB_WORKSPACE/crosvm-commit.txt"
           git -C external/virglrenderer rev-parse HEAD | tee "$GITHUB_WORKSPACE/virglrenderer-commit.txt"
           df -h /
+      - name: Fix gfxstream host/vulkan gettid for glibc
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE/aosp"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/fix_gfxstream_gettid.py" .
+          head -5 hardware/google/gfxstream/host/vulkan/decoder_profile.cpp
+          git -C hardware/google/gfxstream diff --stat | tee "$GITHUB_WORKSPACE/gfxstream-gettid-fix.txt"
+          git -C hardware/google/gfxstream diff --binary > "$GITHUB_WORKSPACE/gfxstream-gettid.patch"
       - name: Verify the crosvm module is in the synced tree
         run: |
           set -eux
@@ -134,6 +142,8 @@ jobs:
             source.patch
             patch-stat.txt
             host-variant-disabled.txt
+            gfxstream-gettid-fix.txt
+            gfxstream-gettid.patch
             crosvm-commit.txt
             virglrenderer-commit.txt
             soong-crosvm.log
