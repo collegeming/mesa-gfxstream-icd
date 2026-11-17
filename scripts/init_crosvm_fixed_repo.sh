@@ -15,11 +15,15 @@ test "$(git -C "$tool" rev-parse HEAD)" = "$commit"
 printf '%s  %s\n' 9eb91b9417aec42d0159e1edd986a9e59f0bd93b078ab06203a306b8df4581b0 "$lock/resolved-manifest.xml" | sha256sum -c -
 test ! -e "$workspace/aosp/.repo"
 test ! -e "$workspace/locked-manifest-repo"
-# Fetch only the reviewed object ID. No --no-repo-verify, fallback, or moving ref.
-git -C "$tool" fetch --no-tags --depth=1 origin "$tag:refs/tags/v2.54"
+# Shallow-source tag rejection is a hypothesis; verbose CI must confirm the result.
+# Complete only this reviewed object's ancestry. Never disable verify or change refs.
+git -C "$tool" fetch --unshallow --no-tags origin "$tag:refs/tags/v2.54"
+test "$(git -C "$tool" rev-parse --is-shallow-repository)" = false
+test "$(git -C "$tool" rev-parse HEAD)" = "$commit"
 test "$(git -C "$tool" rev-parse refs/tags/v2.54)" = "$tag"
 test "$(git -C "$tool" cat-file -t refs/tags/v2.54)" = tag
 test "$(git -C "$tool" rev-parse 'refs/tags/v2.54^{commit}')" = "$commit"
+test "$(git -C "$tool" describe --exact-match "$commit")" = v2.54
 mkdir "$workspace/locked-manifest-repo"
 cp "$lock/resolved-manifest.xml" "$workspace/locked-manifest-repo/default.xml"
 git -C "$workspace/locked-manifest-repo" init -b main
@@ -29,9 +33,13 @@ git -C "$workspace/locked-manifest-repo" -c user.name=crosvm-ci -c user.email=cr
 git config --global user.name crosvm-ci
 git config --global user.email crosvm-ci@users.noreply.github.com
 cd "$workspace/aosp"
-python3 -I "$tool/repo" init \
+python3 -I "$tool/repo" init --verbose \
   -u "file://$workspace/locked-manifest-repo" -b main -m default.xml --depth 1 \
   --repo-rev="$commit"
+test "$(git -C .repo/repo rev-parse --is-shallow-repository)" = false
 test "$(git -C .repo/repo rev-parse HEAD)" = "$commit"
 test "$(git -C .repo/repo rev-parse refs/tags/v2.54)" = "$tag"
+test "$(git -C .repo/repo cat-file -t refs/tags/v2.54)" = tag
+test "$(git -C .repo/repo rev-parse 'refs/tags/v2.54^{commit}')" = "$commit"
+test "$(git -C .repo/repo describe --exact-match "$commit")" = v2.54
 printf 'FIXED_BOOTSTRAP_PASS repo_head=%s annotated_tag=%s; NO_PROJECT_SYNC NO_BUILD NO_DEVICE\n' "$commit" "$tag"
