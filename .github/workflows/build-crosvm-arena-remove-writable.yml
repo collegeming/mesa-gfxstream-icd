@@ -9,6 +9,13 @@ name: build-crosvm-arena-remove-writable
 # "vcpu hit unknown error: Bad address (os error 14)".
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        description: 'First resolve a NEW fixed manifest; legacy build is disabled on diagnostic branches'
+        type: choice
+        options: [resolve, legacy-build]
+        default: resolve
+        required: true
   push:
     branches: [fix/crosvm-arena-remove-writable]
     paths:
@@ -20,9 +27,56 @@ concurrency:
   group: crosvm-arena-remove-writable
   cancel-in-progress: false
 jobs:
+  resolve-manifest:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'resolve'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed resolver only
+        uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - name: Resolver selfcheck (CI only, no build)
+        run: python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/lock_crosvm_manifest.py" --selfcheck
+      - name: Checkout exact input manifest (not deployed-run reconstruction)
+        uses: actions/checkout@v4
+        with:
+          repository: Droid-VM/crosvm-minimal-manifest
+          ref: 6ee0c357c461f09245a0378c55459993f067876e
+          path: manifest-source
+          persist-credentials: false
+      - name: Resolve every project and supplemental llvm-libc to full SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C "$GITHUB_WORKSPACE/manifest-source" rev-parse HEAD)" = 6ee0c357c461f09245a0378c55459993f067876e
+          test ! -e "$GITHUB_WORKSPACE/manifest-lock"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/lock_crosvm_manifest.py" \
+            --manifest "$GITHUB_WORKSPACE/manifest-source/crosvm-minimal.xml" \
+            --output "$GITHUB_WORKSPACE/manifest-lock"
+          {
+            echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
+            echo 'Historical run43938110284 did not publish a complete resolved manifest.'
+            echo 'NOT_BUILT; NOT_DEVICE_TESTED; no source sync or compile performed.'
+            git -C "$GITHUB_WORKSPACE/patch-repo" rev-parse HEAD
+            git --version
+            python3 --version
+            sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/lock_crosvm_manifest.py"
+          } > "$GITHUB_WORKSPACE/manifest-lock/BUILD-INFO.txt"
+          cd "$GITHUB_WORKSPACE/manifest-lock"
+          sha256sum input-manifest.xml resolved-manifest.xml lock-info.json BUILD-INFO.txt > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload lock for independent review (never auto-build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-new-fixed-manifest-${{ github.run_id }}
+          path: manifest-lock/
+          if-no-files-found: error
   # Same source lineage as the deployed runtime: Droid-VM/crosvm via the minimal manifest, built
   # with soong against the Android arm64 target (the binary the DroidVM app execs).
   android-soong:
+    if: github.ref == 'refs/heads/fix/crosvm-arena-remove-writable' && (github.event_name == 'push' || inputs.phase == 'legacy-build')
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
@@ -179,6 +233,7 @@ jobs:
   # Host-side regression test for the changed function. Runs on the same file content as the
   # soong tree (the pinned production tree carries an identical base/src/sys/linux/mmap.rs).
   host-unit-test:
+    if: github.ref == 'refs/heads/fix/crosvm-arena-remove-writable' && (github.event_name == 'push' || inputs.phase == 'legacy-build')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
