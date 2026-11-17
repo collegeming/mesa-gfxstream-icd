@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: 'First resolve a NEW fixed manifest; legacy build is disabled on diagnostic branches'
+        description: 'Resolve lock, dry preflight, or explicitly build NEW fixed baseline; never deploys'
         type: choice
-        options: [resolve, legacy-build]
+        options: [resolve, preflight, fixed-baseline, legacy-build]
         default: resolve
         required: true
   push:
@@ -73,6 +73,165 @@ jobs:
           name: crosvm-new-fixed-manifest-${{ github.run_id }}
           path: manifest-lock/
           if-no-files-found: error
+  fixed-preflight:
+    if: github.event_name == 'workflow_dispatch' && (inputs.phase == 'preflight' || inputs.phase == 'fixed-baseline')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - name: Verify locked inputs and run dry metadata admission selfcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/patch-repo/manifests/new-fixed-44129434140"
+          sha256sum -c SHA256SUMS
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" --lock "$PWD" --selfcheck
+  fixed-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'fixed-baseline' && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
+    needs: fixed-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: '2'
+      LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
+      EVIDENCE: ${{ github.workspace }}/fixed-evidence
+      EXACT_OUTPUT: out/soong/.intermediates/external/crosvm/crosvm_device_only/crosvm_device_only_bin/android_arm64_armv8-a/unstripped/crosvm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - name: Checkout exact historical compatibility helpers (not current HEAD helpers)
+        uses: actions/checkout@v4
+        with:
+          ref: 3c20ef7b333755e488f92946249ae92660385f35
+          path: compat-repo
+          persist-credentials: false
+      - name: Checkout pinned repo launcher
+        uses: actions/checkout@v4
+        with:
+          repository: GerritCodeReview/git-repo
+          ref: 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
+          path: repo-tool
+          persist-credentials: false
+      - name: Prepare isolated runner and evidence (no device access)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$GITHUB_WORKSPACE/aosp"
+          mkdir "$EVIDENCE" "$GITHUB_WORKSPACE/aosp" "$GITHUB_WORKSPACE/locked-manifest-repo"
+          cp "$LOCK/"* "$EVIDENCE/"
+          (cd "$LOCK" && sha256sum -c SHA256SUMS)
+          test "$(git -C "$GITHUB_WORKSPACE/compat-repo" rev-parse HEAD)" = 3c20ef7b333755e488f92946249ae92660385f35
+          test "$(git -C "$GITHUB_WORKSPACE/repo-tool" rev-parse HEAD)" = 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
+          sha256sum "$GITHUB_WORKSPACE/compat-repo/scripts/"{patch_crosvm_arena_remove_writable,fix_gfxstream_gettid,provide_missing_include_bytes,disable_crosvm_host_variant}.py > "$EVIDENCE/compat-helper-SHA256SUMS"
+          cp "$LOCK/resolved-manifest.xml" "$GITHUB_WORKSPACE/locked-manifest-repo/default.xml"
+          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" init -b main
+          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" add default.xml
+          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" -c user.name=crosvm-ci -c user.email=crosvm-ci@users.noreply.github.com commit -m 'Exact verified 97-project lock'
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/lib/jvm /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell
+          sudo apt-get clean
+          sudo docker image prune -a -f
+          sudo fallocate -l 8G /swapfile-fixed
+          sudo chmod 600 /swapfile-fixed
+          sudo mkswap /swapfile-fixed
+          sudo swapon /swapfile-fixed
+      - name: Sync ONLY full-SHA manifest then verify every pristine project HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" init \
+            -u "file://$GITHUB_WORKSPACE/locked-manifest-repo" -b main -m default.xml --depth 1 \
+            --repo-rev=v2.54
+          test "$(git -C .repo/repo rev-parse HEAD)" = 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
+          python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" sync -c -j8 --no-tags --optimized-fetch
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" \
+            --lock "$LOCK" --tree "$PWD" --evidence "$EVIDENCE/verified-project-heads.json"
+          python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" manifest -r -o "$EVIDENCE/synced-resolved-manifest.xml"
+      - name: Apply historical paired arena and Android build compatibility only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          H="$GITHUB_WORKSPACE/compat-repo/scripts"
+          python3 -I "$H/fix_gfxstream_gettid.py" .
+          python3 -I "$H/provide_missing_include_bytes.py" external/crosvm | tee "$EVIDENCE/include-bytes-placeholders.txt"
+          python3 -I "$H/patch_crosvm_arena_remove_writable.py" external/crosvm
+          python3 -I "$H/patch_crosvm_arena_remove_writable.py" external/crosvm --check
+          python3 -I "$H/disable_crosvm_host_variant.py" external/crosvm
+          git -C external/crosvm diff --check
+          git -C hardware/google/gfxstream diff --check
+          git -C external/crosvm diff --binary > "$EVIDENCE/source.patch"
+          git -C hardware/google/gfxstream diff --binary > "$EVIDENCE/gfxstream-gettid.patch"
+          sha256sum "$EVIDENCE/source.patch" "$EVIDENCE/gfxstream-gettid.patch" > "$EVIDENCE/patch-SHA256SUMS"
+      - name: Build current exact device-only module; any m failure stops admission
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          test ! -e out
+          source build/envsetup.sh
+          lunch aosp_arm64 trunk_staging eng
+          test ! -e "$EXACT_OUTPUT"
+          touch "$EVIDENCE/build-start"
+          ALLOW_MISSING_DEPENDENCIES=true SOONG_ALLOW_MISSING_DEPENDENCIES=true \
+            TARGET_BUILD_UNBUNDLED=true m crosvm_device_only -j2 2>&1 | tee "$EVIDENCE/soong-crosvm.log"
+          test "$EXACT_OUTPUT" -nt "$EVIDENCE/build-start"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" \
+            --lock "$LOCK" --tree "$PWD" --log "$EVIDENCE/soong-crosvm.log" --evidence "$EVIDENCE/output-admission.json"
+          readelf -h -d "$EXACT_OUTPUT" > "$EVIDENCE/crosvm-elf.txt"
+          # Graph path is printed by historical soong-crosvm.log:291. -t commands never builds.
+          test -s out/soong/build.aosp_arm64.ninja
+          prebuilts/build-tools/linux-x86/bin/ninja -f out/soong/build.aosp_arm64.ninja \
+            -t commands "$EXACT_OUTPUT" > "$EVIDENCE/device-only-link-commands.txt"
+          test -s "$EVIDENCE/device-only-link-commands.txt"
+          cp "$EXACT_OUTPUT" "$EVIDENCE/crosvm"
+          cp build/soong/rust/config/global.go "$EVIDENCE/rust-toolchain-config.go"
+          cp build/soong/cc/config/global.go "$EVIDENCE/clang-toolchain-config.go"
+          # Record every available compiler version, not a guessed active compiler.
+          for compiler in prebuilts/rust/linux-x86/*/bin/rustc prebuilts/clang/host/linux-x86/clang-*/bin/clang; do
+            if [ -x "$compiler" ]; then
+              printf '\n%s\n' "$compiler"
+              "$compiler" --version
+              sha256sum "$compiler"
+            fi
+          done > "$EVIDENCE/compiler-versions.txt"
+          {
+            echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION; baseline only, no metadata candidate'
+            echo 'NOT_DEVICE_TESTED; no deployment; Gunyah placeholders not exercised (KVM only)'
+            printf 'exact_output=%s\n' "$EXACT_OUTPUT"
+            echo 'target=aosp_arm64/trunk_staging/eng; module=crosvm_device_only; jobs=2'
+            echo 'ALLOW_MISSING_DEPENDENCIES=true SOONG_ALLOW_MISSING_DEPENDENCIES=true TARGET_BUILD_UNBUNDLED=true'
+            git -C "$GITHUB_WORKSPACE/patch-repo" rev-parse HEAD
+            git -C "$GITHUB_WORKSPACE/compat-repo" rev-parse HEAD
+            sha256sum "$LOCK/resolved-manifest.xml" "$EVIDENCE/"{source.patch,gfxstream-gettid.patch,crosvm}
+            echo 'Actual module compile/link commands: device-only-link-commands.txt (ninja -t commands; no rebuild)'
+            sha256sum "$EVIDENCE/device-only-link-commands.txt" "$EVIDENCE/"{rust-toolchain-config.go,clang-toolchain-config.go}
+            cat "$EVIDENCE/compiler-versions.txt" "$EVIDENCE/compat-helper-SHA256SUMS" "$EVIDENCE/include-bytes-placeholders.txt"
+          } > "$EVIDENCE/BUILD-INFO.txt"
+          (cd "$EVIDENCE" && sha256sum crosvm source.patch gfxstream-gettid.patch resolved-manifest.xml input-manifest.xml lock-info.json synced-resolved-manifest.xml verified-project-heads.json output-admission.json compiler-versions.txt device-only-link-commands.txt rust-toolchain-config.go clang-toolchain-config.go compat-helper-SHA256SUMS patch-SHA256SUMS include-bytes-placeholders.txt soong-crosvm.log crosvm-elf.txt BUILD-INFO.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - name: Upload successful fixed baseline only
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-new-fixed-baseline-${{ github.run_id }}
+          path: fixed-evidence/
+          if-no-files-found: error
+      - name: Preserve failure evidence without publishing a baseline artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-fixed-build-failure-${{ github.run_id }}
+          path: |
+            fixed-evidence/*.log
+            fixed-evidence/*manifest.xml
+            fixed-evidence/*heads.json
+            fixed-evidence/*.patch
+            fixed-evidence/*SHA256SUMS
+          if-no-files-found: warn
   # Same source lineage as the deployed runtime: Droid-VM/crosvm via the minimal manifest, built
   # with soong against the Android arm64 target (the binary the DroidVM app execs).
   android-soong:
