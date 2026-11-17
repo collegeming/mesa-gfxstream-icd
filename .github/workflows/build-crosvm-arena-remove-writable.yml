@@ -13,7 +13,7 @@ on:
       phase:
         description: 'Resolve lock, dry preflight, or explicitly build NEW fixed baseline; never deploys'
         type: choice
-        options: [resolve, preflight, bootstrap-check, metadata-preflight, fixed-baseline, legacy-build]
+        options: [resolve, preflight, bootstrap-check, metadata-preflight, fixed-baseline, fixed-metadata, legacy-build]
         default: resolve
         required: true
   push:
@@ -24,7 +24,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ inputs.phase == 'metadata-preflight' && 'crosvm-metadata-preflight' || 'crosvm-arena-remove-writable' }}
+  group: ${{ inputs.phase == 'metadata-preflight' && 'crosvm-metadata-preflight' || inputs.phase == 'fixed-metadata' && 'crosvm-fixed-metadata' || 'crosvm-arena-remove-writable' }}
   cancel-in-progress: false
 jobs:
   metadata-preflight:
@@ -113,7 +113,7 @@ jobs:
           path: manifest-lock/
           if-no-files-found: error
   fixed-preflight:
-    if: github.event_name == 'workflow_dispatch' && (inputs.phase == 'preflight' || inputs.phase == 'fixed-baseline')
+    if: github.event_name == 'workflow_dispatch' && (inputs.phase == 'preflight' || inputs.phase == 'fixed-baseline' || inputs.phase == 'fixed-metadata')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -152,11 +152,13 @@ jobs:
           test ! -e "$GITHUB_WORKSPACE/aosp/external/crosvm"
           echo 'BOOTSTRAP_CHECK_PASS: exact tag, peeled SHA, repo signature verification and HEAD; no project sync/build/device'
   fixed-baseline:
-    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'fixed-baseline' && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
+    name: fixed-${{ inputs.phase == 'fixed-metadata' && 'metadata' || 'baseline' }}
+    if: github.event_name == 'workflow_dispatch' && (inputs.phase == 'fixed-baseline' || inputs.phase == 'fixed-metadata') && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
     needs: fixed-preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
+      BUILD_VARIANT: ${{ inputs.phase == 'fixed-metadata' && 'metadata' || 'baseline' }}
       CARGO_BUILD_JOBS: '2'
       LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
       EVIDENCE: ${{ github.workspace }}/fixed-evidence
@@ -224,6 +226,27 @@ jobs:
           git -C external/crosvm diff --binary > "$EVIDENCE/source.patch"
           git -C hardware/google/gfxstream diff --binary > "$EVIDENCE/gfxstream-gettid.patch"
           sha256sum "$EVIDENCE/source.patch" "$EVIDENCE/gfxstream-gettid.patch" > "$EVIDENCE/patch-SHA256SUMS"
+      - name: Metadata variant only; exact reviewed additive patch before SAME build
+        if: inputs.phase == 'fixed-metadata'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          cp "$EVIDENCE/source.patch" "$EVIDENCE/baseline-source.patch"
+          printf '%s  %s\n' 18990c89e7d0107d0e84c732bd88c9358a45b86689ac13f28c4694622a8dbadf "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_scanout_contract.py" | sha256sum -c -
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_scanout_contract.py" external/crosvm --check | tee "$EVIDENCE/metadata-check.txt"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_scanout_contract.py" external/crosvm | tee "$EVIDENCE/metadata-apply.txt"
+          diff -u <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/metadata-check.txt") <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/metadata-apply.txt")
+          git -C external/crosvm diff --check
+          git -C external/crosvm diff --name-only -- devices/src/virtio/gpu/virtio_gpu.rs gpu_display/src/lib.rs gpu_display/src/gpu_display_android.rs | sort > "$EVIDENCE/metadata-affected-files.txt"
+          printf '%s\n' devices/src/virtio/gpu/virtio_gpu.rs gpu_display/src/gpu_display_android.rs gpu_display/src/lib.rs | sort > "$EVIDENCE/metadata-expected-files.txt"
+          diff -u "$EVIDENCE/metadata-expected-files.txt" "$EVIDENCE/metadata-affected-files.txt"
+          git -C external/crosvm diff --binary -- devices/src/virtio/gpu/virtio_gpu.rs gpu_display/src/lib.rs gpu_display/src/gpu_display_android.rs > "$EVIDENCE/metadata-only.patch"
+          printf '%s  %s\n' baa83edbe6f024e67b77a5e3b71e5ed109041ef1c27dd01eb149740088fc3916 "$EVIDENCE/metadata-only.patch" | sha256sum -c -
+          git -C external/crosvm diff --binary > "$EVIDENCE/source.patch"
+          sha256sum "$EVIDENCE/source.patch" "$EVIDENCE/gfxstream-gettid.patch" "$EVIDENCE/metadata-only.patch" "$EVIDENCE/baseline-source.patch" > "$EVIDENCE/patch-SHA256SUMS"
+          sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_scanout_contract.py" > "$EVIDENCE/metadata-helper-SHA256SUMS"
+          printf '%s\n' 'DIAGNOSTIC_ONLY; coverage=transfer_read_direct,transfer_read_staging; NOT import/pool/mmap' 'query_status=cached_info_3d_NOT_live_export; resource_format=creation_enum_or_unknown_blob_restore' 'raw ANB metadata only; no pixel/fourcc/alpha behavior change; global events<=16; NOT_DEVICE_TESTED' > "$EVIDENCE/metadata-coverage.txt"
       - name: Build current exact device-only module; any m failure stops admission
         shell: bash
         run: |
@@ -257,7 +280,13 @@ jobs:
             fi
           done > "$EVIDENCE/compiler-versions.txt"
           {
-            echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION; baseline only, no metadata candidate'
+            echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
+            printf 'variant=%s\n' "$BUILD_VARIANT"
+            echo 'baseline_ci_source=d290a8250a71ffa0e858737098ccbf03caf3180a; same 97-project lock and historical compatibility helpers'
+            if [ "$BUILD_VARIANT" = metadata ]; then
+              cat "$EVIDENCE/metadata-coverage.txt" "$EVIDENCE/metadata-helper-SHA256SUMS"
+              sha256sum "$EVIDENCE/metadata-only.patch" "$EVIDENCE/baseline-source.patch"
+            fi
             echo 'NOT_DEVICE_TESTED; no deployment; Gunyah placeholders not exercised (KVM only)'
             printf 'exact_output=%s\n' "$EXACT_OUTPUT"
             echo 'target=aosp_arm64/trunk_staging/eng; module=crosvm_device_only; jobs=2'
@@ -270,17 +299,20 @@ jobs:
             cat "$EVIDENCE/compiler-versions.txt" "$EVIDENCE/compat-helper-SHA256SUMS" "$EVIDENCE/include-bytes-placeholders.txt"
           } > "$EVIDENCE/BUILD-INFO.txt"
           (cd "$EVIDENCE" && sha256sum crosvm source.patch gfxstream-gettid.patch resolved-manifest.xml input-manifest.xml lock-info.json synced-resolved-manifest.xml verified-project-heads.json output-admission.json compiler-versions.txt device-only-link-commands.txt rust-toolchain-config.go clang-toolchain-config.go compat-helper-SHA256SUMS patch-SHA256SUMS include-bytes-placeholders.txt soong-crosvm.log crosvm-elf.txt BUILD-INFO.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
-      - name: Upload successful fixed baseline only
+          if [ "$BUILD_VARIANT" = metadata ]; then
+            (cd "$EVIDENCE" && sha256sum metadata-only.patch baseline-source.patch metadata-helper-SHA256SUMS metadata-coverage.txt metadata-check.txt metadata-apply.txt metadata-affected-files.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
+          fi
+      - name: Upload successful fixed variant only
         uses: actions/upload-artifact@v4
         with:
-          name: crosvm-new-fixed-baseline-${{ github.run_id }}
+          name: crosvm-new-fixed-${{ env.BUILD_VARIANT }}-${{ github.run_id }}
           path: fixed-evidence/
           if-no-files-found: error
       - name: Preserve failure evidence without publishing a baseline artifact
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: crosvm-fixed-build-failure-${{ github.run_id }}
+          name: crosvm-fixed-${{ env.BUILD_VARIANT }}-failure-${{ github.run_id }}
           path: |
             fixed-evidence/*.log
             fixed-evidence/*manifest.xml
