@@ -1,0 +1,7 @@
+NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION
+Historical run43938110284 did not publish a complete resolved manifest.
+NOT_BUILT; NOT_DEVICE_TESTED; no source sync or compile performed.
+21fd046770412700c8cf6dd7ac852973c7b9be8d
+git version 2.56.1
+Python 3.12.3
+7d3a148fa8346cca34ff54145b319251899405741d12588c041d739deedb5ce1  /home/runner/work/mesa-gfxstream-icd/mesa-gfxstream-icd/patch-repo/scripts/lock_crosvm_manifest.py

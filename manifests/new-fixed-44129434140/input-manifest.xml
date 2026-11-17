@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="aosp"
+          fetch="https://android.googlesource.com/"
+          review="https://android-review.googlesource.com/" />
+  <remote name="droidvm"
+          fetch="https://github.com/Droid-VM/" />
+  <remote name="crosvm-android"
+          fetch="https://github.com/Crosvm-Android/" />
+
+  <default remote="aosp"
+           revision="android16-qpr2-release"
+           sync-j="8" />
+
+  <!-- Build system -->
+  <project path="build/blueprint" name="platform/build/blueprint" />
+  <project path="build/make" name="platform/build">
+    <linkfile src="CleanSpec.mk" dest="build/CleanSpec.mk" />
+    <linkfile src="buildspec.mk.default" dest="build/buildspec.mk.default" />
+    <linkfile src="core" dest="build/core" />
+    <linkfile src="envsetup.sh" dest="build/envsetup.sh" />
+    <linkfile src="target" dest="build/target" />
+    <linkfile src="tools" dest="build/tools" />
+  </project>
+  <project path="build/release" name="platform/build/release" />
+
+  <!-- Toolchain / prebuilts -->
+  <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" />
+  <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" />
+  <project path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8"
+           name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8" />
+  <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" />
+  <project path="prebuilts/jdk/jdk21" name="platform/prebuilts/jdk/jdk21" />
+  <project path="prebuilts/rust" name="platform/prebuilts/rust" />
+  <project path="prebuilts/sdk" name="platform/prebuilts/sdk" />
+  <project path="toolchain/pgo-profiles" name="toolchain/pgo-profiles" />
+
+  <!-- GSI compatibility snapshots required by aosp_arm64 -->
+  <project path="prebuilts/vndk/v31" name="platform/prebuilts/vndk/v31" />
+  <project path="prebuilts/vndk/v32" name="platform/prebuilts/vndk/v32" />
+  <project path="prebuilts/vndk/v33" name="platform/prebuilts/vndk/v33" />
+  <project path="prebuilts/vndk/v34" name="platform/prebuilts/vndk/v34" />
+
+  <!-- Core platform -->
+  <project path="art" name="platform/art" />
+  <project path="bionic" name="platform/bionic" />
+  <project path="frameworks/base" name="platform/frameworks/base" />
+  <project path="frameworks/av" name="platform/frameworks/av" />
+  <project path="frameworks/native" name="platform/frameworks/native" />
+  <project path="hardware/interfaces" name="platform/hardware/interfaces" />
+  <project path="hardware/libhardware" name="platform/hardware/libhardware" />
+  <project path="kernel/configs" name="kernel/configs" />
+  <project path="libnativehelper" name="platform/libnativehelper" />
+  <project path="device/generic/arm64" name="device/generic/arm64" />
+  <project path="device/generic/common" name="device/generic/common" />
+  <project path="external/selinux" name="platform/external/selinux" />
+  <project path="system/core" name="platform/system/core" />
+  <project path="system/apex" name="platform/system/apex" />
+  <project path="system/libbase" name="platform/system/libbase" />
+  <project path="system/libfmq" name="platform/system/libfmq" />
+  <project path="system/libhwbinder" name="platform/system/libhwbinder" />
+  <project path="system/libhidl" name="platform/system/libhidl" />
+  <project path="system/libvintf" name="platform/system/libvintf" />
+  <project path="system/logging" name="platform/system/logging" />
+  <project path="system/media" name="platform/system/media" />
+  <project path="system/server_configurable_flags" name="platform/system/server_configurable_flags" />
+  <project path="system/memory/libdmabufheap" name="platform/system/memory/libdmabufheap" />
+  <project path="system/sepolicy" name="platform/system/sepolicy" />
+  <project path="system/security" name="platform/system/security" />
+  <project path="system/tools/aidl" name="platform/system/tools/aidl" />
+  <project path="system/tools/hidl" name="platform/system/tools/hidl" />
+  <project path="system/tools/sysprop" name="platform/system/tools/sysprop" />
+  <project path="system/tools/xsdc" name="platform/system/tools/xsdc" />
+  <project path="system/unwinding" name="platform/system/unwinding" />
+  <project path="system/hardware/interfaces" name="platform/system/hardware/interfaces" />
+
+  <!-- Virtualization -->
+  <project path="test/app_compat/csuite" name="platform/test/app_compat/csuite" />
+  <project path="platform_testing" name="platform/platform_testing" />
+  <project path="packages/modules/common" name="platform/packages/modules/common" />
+  <project path="packages/modules/NeuralNetworks" name="platform/packages/modules/NeuralNetworks" />
+
+  <!-- Rust / crosvm direct deps -->
+  <project path="external/go-cmp" name="platform/external/go-cmp" />
+  <project path="external/golang-protobuf" name="platform/external/golang-protobuf" />
+  <project path="external/googletest" name="platform/external/googletest" />
+  <project path="external/gwp_asan" name="platform/external/gwp_asan" />
+  <project path="external/rust/cxx" name="platform/external/rust/cxx" />
+  <project path="external/pogreb" name="platform/external/pogreb" />
+  <project path="external/rust/android-crates-io" name="platform/external/rust/android-crates-io" />
+  <project path="external/scudo" name="platform/external/scudo" />
+  <project path="external/starlark-go" name="platform/external/starlark-go" />
+  <project path="external/minijail" name="platform/external/minijail" />
+  <project path="external/mesa3d" name="platform/external/mesa3d" />
+  <project path="external/virtio-media" name="platform/external/virtio-media" />
+  <project path="external/vm_tools/p9"
+           name="platform/external/vm_tools/p9"
+           revision="main" />
+
+  <!-- Graphics / display stack -->
+  <project path="hardware/google/aemu" name="platform/hardware/google/aemu" />
+  <project path="external/libdrm" name="platform/external/libdrm" />
+  <project path="external/minigbm" name="platform/external/minigbm" />
+  <project path="external/wayland" name="platform/external/wayland" />
+  <project path="external/wayland-protocols" name="platform/external/wayland-protocols" />
+
+  <!-- Native libs -->
+  <project path="external/abseil-cpp" name="platform/external/abseil-cpp" />
+  <project path="external/arm-optimized-routines" name="platform/external/arm-optimized-routines" />
+  <project path="external/error_prone" name="platform/external/error_prone" />
+  <project path="external/expat" name="platform/external/expat" />
+  <project path="external/fmtlib" name="platform/external/fmtlib" />
+  <project path="external/jsoncpp" name="platform/external/jsoncpp" />
+  <project path="external/libcap" name="platform/external/libcap" />
+  <project path="external/boringssl" name="platform/external/boringssl" />
+  <project path="external/compiler-rt" name="platform/external/compiler-rt" />
+  <project path="external/libcxx" name="platform/external/libcxx" />
+  <project path="external/libcxxabi" name="platform/external/libcxxabi" />
+  <project path="external/libepoxy" name="platform/external/libepoxy" />
+  <project path="external/libffi" name="platform/external/libffi" />
+  <project path="external/lz4" name="platform/external/lz4" />
+  <project path="external/perfetto" name="platform/external/perfetto" />
+  <project path="external/protobuf" name="platform/external/protobuf" />
+  <project path="external/speex" name="platform/external/speex" />
+  <project path="external/zlib" name="platform/external/zlib" />
+
+  <!-- Crosvm-Android forks -->
+  <project path="build/soong" name="soong" remote="crosvm-android">
+    <linkfile src="root.bp" dest="Android.bp" />
+    <linkfile src="bootstrap.bash" dest="bootstrap.bash" />
+  </project>
+  <project path="external/rust/crates/v4l2r" name="v4l2r" remote="crosvm-android" />
+  <project path="external/libjpeg-turbo" name="libjpeg-turbo" remote="crosvm-android" />
+  <project path="external/sqlite" name="sqlite" remote="crosvm-android" />
+
+  <!-- Droid-VM forks -->
+  <project path="hardware/google/gfxstream" name="gfxstream" remote="droidvm" revision="droidvm" />
+  <project path="external/crosvm" name="crosvm" remote="droidvm" revision="droidvm" />
+  <project path="packages/modules/Virtualization" name="Virtualization" remote="droidvm" revision="droidvm" />
+  <project path="external/virglrenderer" name="virglrenderer" remote="droidvm" revision="droidvm" />
+  <project path="external/libvncserver" name="libvncserver" remote="droidvm" revision="droidvm" />
+  <!-- AOSP's libzstd names who may depend on it, and crosvm's disk is not on that list
+       (nor is fs_mgr/libsnapshot, which already depended on it). Visibility is declared by
+       the provider, so the grant has to live in zstd itself; this fork is that one commit on
+       top of the AOSP revision. -->
+  <project path="external/zstd" name="zstd" remote="droidvm" revision="droidvm" />
+</manifest>

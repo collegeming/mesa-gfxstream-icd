@@ -1,0 +1,114 @@
+<?xml version='1.0' encoding='utf-8'?>
+<manifest>
+  <remote name="aosp" fetch="https://android.googlesource.com/" review="https://android-review.googlesource.com/" />
+  <remote name="droidvm" fetch="https://github.com/Droid-VM/" />
+  <remote name="crosvm-android" fetch="https://github.com/Crosvm-Android/" />
+  <default remote="aosp" sync-j="8" />
+  <project path="build/blueprint" name="platform/build/blueprint" revision="c39c8a4c103f1393f015a5befa7726f0c14c9bc2" remote="aosp" />
+  <project path="build/make" name="platform/build" revision="b815dded1eafbf06191a6ae306956bb6ed6fb415" remote="aosp">
+    <linkfile src="CleanSpec.mk" dest="build/CleanSpec.mk" />
+    <linkfile src="buildspec.mk.default" dest="build/buildspec.mk.default" />
+    <linkfile src="core" dest="build/core" />
+    <linkfile src="envsetup.sh" dest="build/envsetup.sh" />
+    <linkfile src="target" dest="build/target" />
+    <linkfile src="tools" dest="build/tools" />
+  </project>
+  <project path="build/release" name="platform/build/release" revision="0998133091794b56253fd6bd5c33ed0e0e5bd9de" remote="aosp" />
+  <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" revision="412724a805835d89234d67c363f7ada7f5f8a67f" remote="aosp" />
+  <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" revision="9916fb51ccb914d62d35ad9a7b9b21d2ef046928" remote="aosp" />
+  <project path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8" name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8" revision="42526331f8063728da346ded09bf59e8d8a98556" remote="aosp" />
+  <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" revision="71c50d4d0da8b3dee5c70ee45789d001674ca5f6" remote="aosp" />
+  <project path="prebuilts/jdk/jdk21" name="platform/prebuilts/jdk/jdk21" revision="ef5bcc92586b839ae3dbacc154127092fa4002ec" remote="aosp" />
+  <project path="prebuilts/rust" name="platform/prebuilts/rust" revision="06a4f29f8512c6b77bdce81dd036a3e39954803b" remote="aosp" />
+  <project path="prebuilts/sdk" name="platform/prebuilts/sdk" revision="8c36435476cbaea0a4170a327e55dd4775cd60b9" remote="aosp" />
+  <project path="toolchain/pgo-profiles" name="toolchain/pgo-profiles" revision="09143208038651bf107b8557d79a206b962cb7b6" remote="aosp" />
+  <project path="prebuilts/vndk/v31" name="platform/prebuilts/vndk/v31" revision="1a059a5a203352d3e0c2fd3ccff5719cc37fc340" remote="aosp" />
+  <project path="prebuilts/vndk/v32" name="platform/prebuilts/vndk/v32" revision="e1ba8043f8368220b412c18ee8392850ab009aae" remote="aosp" />
+  <project path="prebuilts/vndk/v33" name="platform/prebuilts/vndk/v33" revision="7e8b409cb621f72e4d751b923051eb54620bd25f" remote="aosp" />
+  <project path="prebuilts/vndk/v34" name="platform/prebuilts/vndk/v34" revision="90559258d3ae430c36eca7f6761058ef07905a86" remote="aosp" />
+  <project path="art" name="platform/art" revision="1690c6912a7972c9e62c39b48c706de9b8b18b4a" remote="aosp" />
+  <project path="bionic" name="platform/bionic" revision="f22516cbc67e81c13cf943ce02f01b8929a98726" remote="aosp" />
+  <project path="frameworks/base" name="platform/frameworks/base" revision="45034f0663f960d9ee5fb0a101a4732b71f6e2f4" remote="aosp" />
+  <project path="frameworks/av" name="platform/frameworks/av" revision="22fd1c5d895e45a49df5582a4b345d8e3b75e46b" remote="aosp" />
+  <project path="frameworks/native" name="platform/frameworks/native" revision="fcbde2bcff56ca1d7bec9cabf8bdca5e288bf103" remote="aosp" />
+  <project path="hardware/interfaces" name="platform/hardware/interfaces" revision="aa229558cbf04bc997ed27465c5e7ad497123d1b" remote="aosp" />
+  <project path="hardware/libhardware" name="platform/hardware/libhardware" revision="67b44bb0f7d1df962e737cfe9baf716bab45792e" remote="aosp" />
+  <project path="kernel/configs" name="kernel/configs" revision="82c305fe2a7af49cbe9928e9b2fe1416f7810a41" remote="aosp" />
+  <project path="libnativehelper" name="platform/libnativehelper" revision="2d584ec2da2c5271ed1576593c6590d652806f0d" remote="aosp" />
+  <project path="device/generic/arm64" name="device/generic/arm64" revision="71380158d818de918338e34a9cb72316fe3cfa4e" remote="aosp" />
+  <project path="device/generic/common" name="device/generic/common" revision="34d73c5cfefaf2c60e0d43cede31f8684953fc96" remote="aosp" />
+  <project path="external/selinux" name="platform/external/selinux" revision="085c131ad1b984bfa8ffdafee7a976e9d89f403c" remote="aosp" />
+  <project path="system/core" name="platform/system/core" revision="e9d1fa3705d7fbd0ac1c942bc4c276161bfbfed1" remote="aosp" />
+  <project path="system/apex" name="platform/system/apex" revision="97548ed51112062a4d1762a7dffa0cadcc09bda9" remote="aosp" />
+  <project path="system/libbase" name="platform/system/libbase" revision="bdf0f4db82fae78492c92a55d473aacc4e963e79" remote="aosp" />
+  <project path="system/libfmq" name="platform/system/libfmq" revision="99d47692bc5fb1a967a0e5345164ffd9b4cf0c5b" remote="aosp" />
+  <project path="system/libhwbinder" name="platform/system/libhwbinder" revision="0e0fd15c90a55a45d2cc49b032c25b581d085912" remote="aosp" />
+  <project path="system/libhidl" name="platform/system/libhidl" revision="d063c3a2bf981d8dab2ca60ea471f940d71167a6" remote="aosp" />
+  <project path="system/libvintf" name="platform/system/libvintf" revision="69c456ea4aa2f503a2904cfbc11f279a3b2efb09" remote="aosp" />
+  <project path="system/logging" name="platform/system/logging" revision="58dac317ea08b8f275ebd01ce864acab2de30b93" remote="aosp" />
+  <project path="system/media" name="platform/system/media" revision="74807f54ac951b3e7064b8153ef900c6b387b7cf" remote="aosp" />
+  <project path="system/server_configurable_flags" name="platform/system/server_configurable_flags" revision="0a600db340a17175d0ac107c234e87724a9305ce" remote="aosp" />
+  <project path="system/memory/libdmabufheap" name="platform/system/memory/libdmabufheap" revision="2b9dbd3bcb16fdc0336bb18fddcca6f95badc237" remote="aosp" />
+  <project path="system/sepolicy" name="platform/system/sepolicy" revision="43e4494a5a78317819dcc2766a11927c12ef3dfd" remote="aosp" />
+  <project path="system/security" name="platform/system/security" revision="882e4a2102348cf7c320737d4e21b39c25d3a422" remote="aosp" />
+  <project path="system/tools/aidl" name="platform/system/tools/aidl" revision="3747384b876442e7ea0c355fe5adc75b29362833" remote="aosp" />
+  <project path="system/tools/hidl" name="platform/system/tools/hidl" revision="9ea202c0fba585c2884a6bb2b1ba2dab46e98a8f" remote="aosp" />
+  <project path="system/tools/sysprop" name="platform/system/tools/sysprop" revision="bd6e32a74ee891ec03c5b27c7f3c63501f4a623f" remote="aosp" />
+  <project path="system/tools/xsdc" name="platform/system/tools/xsdc" revision="ef55c63066afcba5fd8781c2b056ccbe4c6ce687" remote="aosp" />
+  <project path="system/unwinding" name="platform/system/unwinding" revision="dca355ef5ab1af481f2eb0f249a87ad2e43f9fff" remote="aosp" />
+  <project path="system/hardware/interfaces" name="platform/system/hardware/interfaces" revision="8266ce79ba801eb1cb71f123651ab083ad1c1044" remote="aosp" />
+  <project path="test/app_compat/csuite" name="platform/test/app_compat/csuite" revision="0cf35be40138d364aa9048d948f6d8c50ec0ae73" remote="aosp" />
+  <project path="platform_testing" name="platform/platform_testing" revision="8037f13cdf3d529fe396f5013f8f944050229861" remote="aosp" />
+  <project path="packages/modules/common" name="platform/packages/modules/common" revision="deef1ed99f28b761fe55ab4cac61027f6f78f3e8" remote="aosp" />
+  <project path="packages/modules/NeuralNetworks" name="platform/packages/modules/NeuralNetworks" revision="a6875e5d6e976da6cda958b57ed6f5ed69360d6b" remote="aosp" />
+  <project path="external/go-cmp" name="platform/external/go-cmp" revision="163db04d0a17fd9b25316c6203d2d911a40461f6" remote="aosp" />
+  <project path="external/golang-protobuf" name="platform/external/golang-protobuf" revision="fcb969a6e0df55f1460721e1b9c4f2c4d2b5a47f" remote="aosp" />
+  <project path="external/googletest" name="platform/external/googletest" revision="cbeab5d01811d23ea488efc07f2c31f7c53024e2" remote="aosp" />
+  <project path="external/gwp_asan" name="platform/external/gwp_asan" revision="06e22138851092a681871acd42d2958f10630cd5" remote="aosp" />
+  <project path="external/rust/cxx" name="platform/external/rust/cxx" revision="aa5556da131ac8f41aef2a57c2c887a21cf47ac1" remote="aosp" />
+  <project path="external/pogreb" name="platform/external/pogreb" revision="c7851d75ff3a7b8228f548f7235d48cee9130971" remote="aosp" />
+  <project path="external/rust/android-crates-io" name="platform/external/rust/android-crates-io" revision="0bb9c7a4cb26e195379037742a853fa381ecc102" remote="aosp" />
+  <project path="external/scudo" name="platform/external/scudo" revision="03a49bce2224f003b603379a78c88c3dd5bed2af" remote="aosp" />
+  <project path="external/starlark-go" name="platform/external/starlark-go" revision="4947cdc739c985f6d86941e22894f5cefe7c9e9a" remote="aosp" />
+  <project path="external/minijail" name="platform/external/minijail" revision="ab6cd0f786481e2deecfe6f8563ae0d2416bd460" remote="aosp" />
+  <project path="external/mesa3d" name="platform/external/mesa3d" revision="d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd" remote="aosp" />
+  <project path="external/virtio-media" name="platform/external/virtio-media" revision="32d73662cf9df0fba69ce160ae3409fd9750dd35" remote="aosp" />
+  <project path="external/vm_tools/p9" name="platform/external/vm_tools/p9" revision="658aeeec4911704d0d88e2e37471db56904fc6d8" remote="aosp" />
+  <project path="hardware/google/aemu" name="platform/hardware/google/aemu" revision="39eb78a922e37c3c18a81e9e3c9e4de45b477e02" remote="aosp" />
+  <project path="external/libdrm" name="platform/external/libdrm" revision="abd25312f278da5cbeeca6a9b5fc1c5ea6dabc23" remote="aosp" />
+  <project path="external/minigbm" name="platform/external/minigbm" revision="b7c93249f685222a524c51403719493cc114ff5d" remote="aosp" />
+  <project path="external/wayland" name="platform/external/wayland" revision="bdb389207f7113c752e8e6fee1c2897168ba473b" remote="aosp" />
+  <project path="external/wayland-protocols" name="platform/external/wayland-protocols" revision="f7645122a11fcb923cbc36721ce9c111b098be99" remote="aosp" />
+  <project path="external/abseil-cpp" name="platform/external/abseil-cpp" revision="2bf8472a92b84fe4617eeb50053e7a942edcb1b3" remote="aosp" />
+  <project path="external/arm-optimized-routines" name="platform/external/arm-optimized-routines" revision="1a2b3aeae89d8d89155305e22cec96fc1028081c" remote="aosp" />
+  <project path="external/error_prone" name="platform/external/error_prone" revision="7b74075cd541d53d453a5d9e2b2f367d71692cdb" remote="aosp" />
+  <project path="external/expat" name="platform/external/expat" revision="79dde19a8fe1dfb580d39de37854221a6de5f09b" remote="aosp" />
+  <project path="external/fmtlib" name="platform/external/fmtlib" revision="d50695f04854e474766da7d713bf8242f4ceb4f8" remote="aosp" />
+  <project path="external/jsoncpp" name="platform/external/jsoncpp" revision="c5062d3ff8a6042ef034bd6980966e02abd8762e" remote="aosp" />
+  <project path="external/libcap" name="platform/external/libcap" revision="ca128b78c0b6629ffe88edc04d2a9415adbafcd0" remote="aosp" />
+  <project path="external/boringssl" name="platform/external/boringssl" revision="1e3b727981831886a0910cd9e82d5bbee4cc7029" remote="aosp" />
+  <project path="external/compiler-rt" name="platform/external/compiler-rt" revision="a36a1bcac7ec7ac9be29d8b0b5e669d53f7886f7" remote="aosp" />
+  <project path="external/libcxx" name="platform/external/libcxx" revision="88894a62bb97313ed9bf79a546f1486de4b2e723" remote="aosp" />
+  <project path="external/libcxxabi" name="platform/external/libcxxabi" revision="84450eba5a24fe5b7df77ed1307bfada05b14dc7" remote="aosp" />
+  <project path="external/libepoxy" name="platform/external/libepoxy" revision="3d6251ce10421187437a570ae389a68dcc160f4a" remote="aosp" />
+  <project path="external/libffi" name="platform/external/libffi" revision="30e76ea6cdd84cbbaa5dd5e5bbfce29538328fb4" remote="aosp" />
+  <project path="external/lz4" name="platform/external/lz4" revision="2fe12748754b3c4f6456b63207fe39d9bffa56c2" remote="aosp" />
+  <project path="external/perfetto" name="platform/external/perfetto" revision="df0f96de5f5c811168454194966553c869d56a80" remote="aosp" />
+  <project path="external/protobuf" name="platform/external/protobuf" revision="31fc4250f78631cf8f4f1cc48b200acf11e9c884" remote="aosp" />
+  <project path="external/speex" name="platform/external/speex" revision="1a255c4507c278c58b7bae5979d51de6c4bfb8fd" remote="aosp" />
+  <project path="external/zlib" name="platform/external/zlib" revision="a6f47e8bd7c1ba412c4b5a3539aa77fe628d0172" remote="aosp" />
+  <project path="build/soong" name="soong" remote="crosvm-android" revision="c2db5181e9e1b6a383f6e858fb39b3db26aba7e7">
+    <linkfile src="root.bp" dest="Android.bp" />
+    <linkfile src="bootstrap.bash" dest="bootstrap.bash" />
+  </project>
+  <project path="external/rust/crates/v4l2r" name="v4l2r" remote="crosvm-android" revision="1f2bbec61f0b09955f0610478ccaa356b7a6ecac" />
+  <project path="external/libjpeg-turbo" name="libjpeg-turbo" remote="crosvm-android" revision="c603c68c90d356382d313993af66c9d9fb91f27c" />
+  <project path="external/sqlite" name="sqlite" remote="crosvm-android" revision="99b149b3033cc695e2815dd001d08238eecc7c9d" />
+  <project path="hardware/google/gfxstream" name="gfxstream" remote="droidvm" revision="cbc6df3b11b3eac8fb13d89e0a542f763b3bdfcc" />
+  <project path="external/crosvm" name="crosvm" remote="droidvm" revision="849e05f12d5c8d4c36af8e15763986d242cd43b5" />
+  <project path="packages/modules/Virtualization" name="Virtualization" remote="droidvm" revision="862c6af544ce4ca89e5dc8f1aca10a832367d77f" />
+  <project path="external/virglrenderer" name="virglrenderer" remote="droidvm" revision="899a4e179a5793c5aa86bbf0799b0683c6746422" />
+  <project path="external/libvncserver" name="libvncserver" remote="droidvm" revision="082e869d0e6e2441b810fc9877bce1acd30f9393" />
+  <project path="external/zstd" name="zstd" remote="droidvm" revision="0552a06f6a0b50cdeed444534810741a670d6d46" />
+  <project path="external/llvm-libc" name="platform/external/llvm-libc" remote="aosp" revision="24af38d6527d0ee6d61cea5052c83a01725ac98f" />
+</manifest>

@@ -1,0 +1,791 @@
+{
+  "baseline_status": "NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION",
+  "manifest_repository": "https://github.com/Droid-VM/crosvm-minimal-manifest",
+  "manifest_commit": "6ee0c357c461f09245a0378c55459993f067876e",
+  "historical_ci_commit": "3c20ef7b333755e488f92946249ae92660385f35",
+  "input_project_count": 96,
+  "resolved_project_count": 97,
+  "supplement": "external/llvm-libc",
+  "input_manifest_sha256": "6f2dec2aa074bf386aba511706e9319160dbc8560807855127c65da74fcaada1",
+  "resolved_manifest_sha256": "9eb91b9417aec42d0159e1edd986a9e59f0bd93b078ab06203a306b8df4581b0",
+  "build_status": "NOT_BUILT",
+  "device_status": "NOT_TESTED",
+  "projects": [
+    {
+      "path": "build/blueprint",
+      "name": "platform/build/blueprint",
+      "url": "https://android.googlesource.com/platform/build/blueprint",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "c39c8a4c103f1393f015a5befa7726f0c14c9bc2",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "build/make",
+      "name": "platform/build",
+      "url": "https://android.googlesource.com/platform/build",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "b815dded1eafbf06191a6ae306956bb6ed6fb415",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "build/release",
+      "name": "platform/build/release",
+      "url": "https://android.googlesource.com/platform/build/release",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "0998133091794b56253fd6bd5c33ed0e0e5bd9de",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/build-tools",
+      "name": "platform/prebuilts/build-tools",
+      "url": "https://android.googlesource.com/platform/prebuilts/build-tools",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "412724a805835d89234d67c363f7ada7f5f8a67f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/clang/host/linux-x86",
+      "name": "platform/prebuilts/clang/host/linux-x86",
+      "url": "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "9916fb51ccb914d62d35ad9a7b9b21d2ef046928",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+      "name": "platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "42526331f8063728da346ded09bf59e8d8a98556",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/go/linux-x86",
+      "name": "platform/prebuilts/go/linux-x86",
+      "url": "https://android.googlesource.com/platform/prebuilts/go/linux-x86",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "71c50d4d0da8b3dee5c70ee45789d001674ca5f6",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/jdk/jdk21",
+      "name": "platform/prebuilts/jdk/jdk21",
+      "url": "https://android.googlesource.com/platform/prebuilts/jdk/jdk21",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "ef5bcc92586b839ae3dbacc154127092fa4002ec",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/rust",
+      "name": "platform/prebuilts/rust",
+      "url": "https://android.googlesource.com/platform/prebuilts/rust",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "06a4f29f8512c6b77bdce81dd036a3e39954803b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/sdk",
+      "name": "platform/prebuilts/sdk",
+      "url": "https://android.googlesource.com/platform/prebuilts/sdk",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "8c36435476cbaea0a4170a327e55dd4775cd60b9",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "toolchain/pgo-profiles",
+      "name": "toolchain/pgo-profiles",
+      "url": "https://android.googlesource.com/toolchain/pgo-profiles",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "09143208038651bf107b8557d79a206b962cb7b6",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/vndk/v31",
+      "name": "platform/prebuilts/vndk/v31",
+      "url": "https://android.googlesource.com/platform/prebuilts/vndk/v31",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1a059a5a203352d3e0c2fd3ccff5719cc37fc340",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/vndk/v32",
+      "name": "platform/prebuilts/vndk/v32",
+      "url": "https://android.googlesource.com/platform/prebuilts/vndk/v32",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "e1ba8043f8368220b412c18ee8392850ab009aae",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/vndk/v33",
+      "name": "platform/prebuilts/vndk/v33",
+      "url": "https://android.googlesource.com/platform/prebuilts/vndk/v33",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "7e8b409cb621f72e4d751b923051eb54620bd25f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "prebuilts/vndk/v34",
+      "name": "platform/prebuilts/vndk/v34",
+      "url": "https://android.googlesource.com/platform/prebuilts/vndk/v34",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "90559258d3ae430c36eca7f6761058ef07905a86",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "art",
+      "name": "platform/art",
+      "url": "https://android.googlesource.com/platform/art",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1690c6912a7972c9e62c39b48c706de9b8b18b4a",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "bionic",
+      "name": "platform/bionic",
+      "url": "https://android.googlesource.com/platform/bionic",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "frameworks/base",
+      "name": "platform/frameworks/base",
+      "url": "https://android.googlesource.com/platform/frameworks/base",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "frameworks/av",
+      "name": "platform/frameworks/av",
+      "url": "https://android.googlesource.com/platform/frameworks/av",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "22fd1c5d895e45a49df5582a4b345d8e3b75e46b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "frameworks/native",
+      "name": "platform/frameworks/native",
+      "url": "https://android.googlesource.com/platform/frameworks/native",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "fcbde2bcff56ca1d7bec9cabf8bdca5e288bf103",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "hardware/interfaces",
+      "name": "platform/hardware/interfaces",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "aa229558cbf04bc997ed27465c5e7ad497123d1b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "hardware/libhardware",
+      "name": "platform/hardware/libhardware",
+      "url": "https://android.googlesource.com/platform/hardware/libhardware",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "67b44bb0f7d1df962e737cfe9baf716bab45792e",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "kernel/configs",
+      "name": "kernel/configs",
+      "url": "https://android.googlesource.com/kernel/configs",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "82c305fe2a7af49cbe9928e9b2fe1416f7810a41",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "libnativehelper",
+      "name": "platform/libnativehelper",
+      "url": "https://android.googlesource.com/platform/libnativehelper",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "2d584ec2da2c5271ed1576593c6590d652806f0d",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "device/generic/arm64",
+      "name": "device/generic/arm64",
+      "url": "https://android.googlesource.com/device/generic/arm64",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "71380158d818de918338e34a9cb72316fe3cfa4e",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "device/generic/common",
+      "name": "device/generic/common",
+      "url": "https://android.googlesource.com/device/generic/common",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "34d73c5cfefaf2c60e0d43cede31f8684953fc96",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/selinux",
+      "name": "platform/external/selinux",
+      "url": "https://android.googlesource.com/platform/external/selinux",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "085c131ad1b984bfa8ffdafee7a976e9d89f403c",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/core",
+      "name": "platform/system/core",
+      "url": "https://android.googlesource.com/platform/system/core",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "e9d1fa3705d7fbd0ac1c942bc4c276161bfbfed1",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/apex",
+      "name": "platform/system/apex",
+      "url": "https://android.googlesource.com/platform/system/apex",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "97548ed51112062a4d1762a7dffa0cadcc09bda9",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/libbase",
+      "name": "platform/system/libbase",
+      "url": "https://android.googlesource.com/platform/system/libbase",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "bdf0f4db82fae78492c92a55d473aacc4e963e79",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/libfmq",
+      "name": "platform/system/libfmq",
+      "url": "https://android.googlesource.com/platform/system/libfmq",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "99d47692bc5fb1a967a0e5345164ffd9b4cf0c5b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/libhwbinder",
+      "name": "platform/system/libhwbinder",
+      "url": "https://android.googlesource.com/platform/system/libhwbinder",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "0e0fd15c90a55a45d2cc49b032c25b581d085912",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/libhidl",
+      "name": "platform/system/libhidl",
+      "url": "https://android.googlesource.com/platform/system/libhidl",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "d063c3a2bf981d8dab2ca60ea471f940d71167a6",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/libvintf",
+      "name": "platform/system/libvintf",
+      "url": "https://android.googlesource.com/platform/system/libvintf",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "69c456ea4aa2f503a2904cfbc11f279a3b2efb09",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/logging",
+      "name": "platform/system/logging",
+      "url": "https://android.googlesource.com/platform/system/logging",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "58dac317ea08b8f275ebd01ce864acab2de30b93",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/media",
+      "name": "platform/system/media",
+      "url": "https://android.googlesource.com/platform/system/media",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "74807f54ac951b3e7064b8153ef900c6b387b7cf",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/server_configurable_flags",
+      "name": "platform/system/server_configurable_flags",
+      "url": "https://android.googlesource.com/platform/system/server_configurable_flags",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "0a600db340a17175d0ac107c234e87724a9305ce",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/memory/libdmabufheap",
+      "name": "platform/system/memory/libdmabufheap",
+      "url": "https://android.googlesource.com/platform/system/memory/libdmabufheap",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "2b9dbd3bcb16fdc0336bb18fddcca6f95badc237",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/sepolicy",
+      "name": "platform/system/sepolicy",
+      "url": "https://android.googlesource.com/platform/system/sepolicy",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "43e4494a5a78317819dcc2766a11927c12ef3dfd",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/security",
+      "name": "platform/system/security",
+      "url": "https://android.googlesource.com/platform/system/security",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "882e4a2102348cf7c320737d4e21b39c25d3a422",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/tools/aidl",
+      "name": "platform/system/tools/aidl",
+      "url": "https://android.googlesource.com/platform/system/tools/aidl",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "3747384b876442e7ea0c355fe5adc75b29362833",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/tools/hidl",
+      "name": "platform/system/tools/hidl",
+      "url": "https://android.googlesource.com/platform/system/tools/hidl",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "9ea202c0fba585c2884a6bb2b1ba2dab46e98a8f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/tools/sysprop",
+      "name": "platform/system/tools/sysprop",
+      "url": "https://android.googlesource.com/platform/system/tools/sysprop",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "bd6e32a74ee891ec03c5b27c7f3c63501f4a623f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/tools/xsdc",
+      "name": "platform/system/tools/xsdc",
+      "url": "https://android.googlesource.com/platform/system/tools/xsdc",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "ef55c63066afcba5fd8781c2b056ccbe4c6ce687",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/unwinding",
+      "name": "platform/system/unwinding",
+      "url": "https://android.googlesource.com/platform/system/unwinding",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "dca355ef5ab1af481f2eb0f249a87ad2e43f9fff",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "system/hardware/interfaces",
+      "name": "platform/system/hardware/interfaces",
+      "url": "https://android.googlesource.com/platform/system/hardware/interfaces",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "8266ce79ba801eb1cb71f123651ab083ad1c1044",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "test/app_compat/csuite",
+      "name": "platform/test/app_compat/csuite",
+      "url": "https://android.googlesource.com/platform/test/app_compat/csuite",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "0cf35be40138d364aa9048d948f6d8c50ec0ae73",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "platform_testing",
+      "name": "platform/platform_testing",
+      "url": "https://android.googlesource.com/platform/platform_testing",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "8037f13cdf3d529fe396f5013f8f944050229861",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "packages/modules/common",
+      "name": "platform/packages/modules/common",
+      "url": "https://android.googlesource.com/platform/packages/modules/common",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "deef1ed99f28b761fe55ab4cac61027f6f78f3e8",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "packages/modules/NeuralNetworks",
+      "name": "platform/packages/modules/NeuralNetworks",
+      "url": "https://android.googlesource.com/platform/packages/modules/NeuralNetworks",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "a6875e5d6e976da6cda958b57ed6f5ed69360d6b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/go-cmp",
+      "name": "platform/external/go-cmp",
+      "url": "https://android.googlesource.com/platform/external/go-cmp",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "163db04d0a17fd9b25316c6203d2d911a40461f6",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/golang-protobuf",
+      "name": "platform/external/golang-protobuf",
+      "url": "https://android.googlesource.com/platform/external/golang-protobuf",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "fcb969a6e0df55f1460721e1b9c4f2c4d2b5a47f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/googletest",
+      "name": "platform/external/googletest",
+      "url": "https://android.googlesource.com/platform/external/googletest",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "cbeab5d01811d23ea488efc07f2c31f7c53024e2",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/gwp_asan",
+      "name": "platform/external/gwp_asan",
+      "url": "https://android.googlesource.com/platform/external/gwp_asan",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "06e22138851092a681871acd42d2958f10630cd5",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/rust/cxx",
+      "name": "platform/external/rust/cxx",
+      "url": "https://android.googlesource.com/platform/external/rust/cxx",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "aa5556da131ac8f41aef2a57c2c887a21cf47ac1",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/pogreb",
+      "name": "platform/external/pogreb",
+      "url": "https://android.googlesource.com/platform/external/pogreb",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "c7851d75ff3a7b8228f548f7235d48cee9130971",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/rust/android-crates-io",
+      "name": "platform/external/rust/android-crates-io",
+      "url": "https://android.googlesource.com/platform/external/rust/android-crates-io",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "0bb9c7a4cb26e195379037742a853fa381ecc102",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/scudo",
+      "name": "platform/external/scudo",
+      "url": "https://android.googlesource.com/platform/external/scudo",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "03a49bce2224f003b603379a78c88c3dd5bed2af",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/starlark-go",
+      "name": "platform/external/starlark-go",
+      "url": "https://android.googlesource.com/platform/external/starlark-go",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "4947cdc739c985f6d86941e22894f5cefe7c9e9a",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/minijail",
+      "name": "platform/external/minijail",
+      "url": "https://android.googlesource.com/platform/external/minijail",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "ab6cd0f786481e2deecfe6f8563ae0d2416bd460",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/mesa3d",
+      "name": "platform/external/mesa3d",
+      "url": "https://android.googlesource.com/platform/external/mesa3d",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/virtio-media",
+      "name": "platform/external/virtio-media",
+      "url": "https://android.googlesource.com/platform/external/virtio-media",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "32d73662cf9df0fba69ce160ae3409fd9750dd35",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/vm_tools/p9",
+      "name": "platform/external/vm_tools/p9",
+      "url": "https://android.googlesource.com/platform/external/vm_tools/p9",
+      "requested_revision": "main",
+      "commit": "658aeeec4911704d0d88e2e37471db56904fc6d8",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "hardware/google/aemu",
+      "name": "platform/hardware/google/aemu",
+      "url": "https://android.googlesource.com/platform/hardware/google/aemu",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "39eb78a922e37c3c18a81e9e3c9e4de45b477e02",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libdrm",
+      "name": "platform/external/libdrm",
+      "url": "https://android.googlesource.com/platform/external/libdrm",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "abd25312f278da5cbeeca6a9b5fc1c5ea6dabc23",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/minigbm",
+      "name": "platform/external/minigbm",
+      "url": "https://android.googlesource.com/platform/external/minigbm",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "b7c93249f685222a524c51403719493cc114ff5d",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/wayland",
+      "name": "platform/external/wayland",
+      "url": "https://android.googlesource.com/platform/external/wayland",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "bdb389207f7113c752e8e6fee1c2897168ba473b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/wayland-protocols",
+      "name": "platform/external/wayland-protocols",
+      "url": "https://android.googlesource.com/platform/external/wayland-protocols",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "f7645122a11fcb923cbc36721ce9c111b098be99",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/abseil-cpp",
+      "name": "platform/external/abseil-cpp",
+      "url": "https://android.googlesource.com/platform/external/abseil-cpp",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "2bf8472a92b84fe4617eeb50053e7a942edcb1b3",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/arm-optimized-routines",
+      "name": "platform/external/arm-optimized-routines",
+      "url": "https://android.googlesource.com/platform/external/arm-optimized-routines",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1a2b3aeae89d8d89155305e22cec96fc1028081c",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/error_prone",
+      "name": "platform/external/error_prone",
+      "url": "https://android.googlesource.com/platform/external/error_prone",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "7b74075cd541d53d453a5d9e2b2f367d71692cdb",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/expat",
+      "name": "platform/external/expat",
+      "url": "https://android.googlesource.com/platform/external/expat",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "79dde19a8fe1dfb580d39de37854221a6de5f09b",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/fmtlib",
+      "name": "platform/external/fmtlib",
+      "url": "https://android.googlesource.com/platform/external/fmtlib",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "d50695f04854e474766da7d713bf8242f4ceb4f8",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/jsoncpp",
+      "name": "platform/external/jsoncpp",
+      "url": "https://android.googlesource.com/platform/external/jsoncpp",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "c5062d3ff8a6042ef034bd6980966e02abd8762e",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libcap",
+      "name": "platform/external/libcap",
+      "url": "https://android.googlesource.com/platform/external/libcap",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "ca128b78c0b6629ffe88edc04d2a9415adbafcd0",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/boringssl",
+      "name": "platform/external/boringssl",
+      "url": "https://android.googlesource.com/platform/external/boringssl",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1e3b727981831886a0910cd9e82d5bbee4cc7029",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/compiler-rt",
+      "name": "platform/external/compiler-rt",
+      "url": "https://android.googlesource.com/platform/external/compiler-rt",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "a36a1bcac7ec7ac9be29d8b0b5e669d53f7886f7",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libcxx",
+      "name": "platform/external/libcxx",
+      "url": "https://android.googlesource.com/platform/external/libcxx",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "88894a62bb97313ed9bf79a546f1486de4b2e723",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libcxxabi",
+      "name": "platform/external/libcxxabi",
+      "url": "https://android.googlesource.com/platform/external/libcxxabi",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "84450eba5a24fe5b7df77ed1307bfada05b14dc7",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libepoxy",
+      "name": "platform/external/libepoxy",
+      "url": "https://android.googlesource.com/platform/external/libepoxy",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "3d6251ce10421187437a570ae389a68dcc160f4a",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libffi",
+      "name": "platform/external/libffi",
+      "url": "https://android.googlesource.com/platform/external/libffi",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "30e76ea6cdd84cbbaa5dd5e5bbfce29538328fb4",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/lz4",
+      "name": "platform/external/lz4",
+      "url": "https://android.googlesource.com/platform/external/lz4",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "2fe12748754b3c4f6456b63207fe39d9bffa56c2",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/perfetto",
+      "name": "platform/external/perfetto",
+      "url": "https://android.googlesource.com/platform/external/perfetto",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "df0f96de5f5c811168454194966553c869d56a80",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/protobuf",
+      "name": "platform/external/protobuf",
+      "url": "https://android.googlesource.com/platform/external/protobuf",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "31fc4250f78631cf8f4f1cc48b200acf11e9c884",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/speex",
+      "name": "platform/external/speex",
+      "url": "https://android.googlesource.com/platform/external/speex",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1a255c4507c278c58b7bae5979d51de6c4bfb8fd",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/zlib",
+      "name": "platform/external/zlib",
+      "url": "https://android.googlesource.com/platform/external/zlib",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "a6f47e8bd7c1ba412c4b5a3539aa77fe628d0172",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "build/soong",
+      "name": "soong",
+      "url": "https://github.com/Crosvm-Android/soong",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "c2db5181e9e1b6a383f6e858fb39b3db26aba7e7",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/rust/crates/v4l2r",
+      "name": "v4l2r",
+      "url": "https://github.com/Crosvm-Android/v4l2r",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "1f2bbec61f0b09955f0610478ccaa356b7a6ecac",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/libjpeg-turbo",
+      "name": "libjpeg-turbo",
+      "url": "https://github.com/Crosvm-Android/libjpeg-turbo",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "c603c68c90d356382d313993af66c9d9fb91f27c",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/sqlite",
+      "name": "sqlite",
+      "url": "https://github.com/Crosvm-Android/sqlite",
+      "requested_revision": "android16-qpr2-release",
+      "commit": "99b149b3033cc695e2815dd001d08238eecc7c9d",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "hardware/google/gfxstream",
+      "name": "gfxstream",
+      "url": "https://github.com/Droid-VM/gfxstream",
+      "requested_revision": "droidvm",
+      "commit": "cbc6df3b11b3eac8fb13d89e0a542f763b3bdfcc",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/crosvm",
+      "name": "crosvm",
+      "url": "https://github.com/Droid-VM/crosvm",
+      "requested_revision": "droidvm",
+      "commit": "849e05f12d5c8d4c36af8e15763986d242cd43b5",
+      "method": "historical artifact source pin; fetchability checked at future sync"
+    },
+    {
+      "path": "packages/modules/Virtualization",
+      "name": "Virtualization",
+      "url": "https://github.com/Droid-VM/Virtualization",
+      "requested_revision": "droidvm",
+      "commit": "862c6af544ce4ca89e5dc8f1aca10a832367d77f",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/virglrenderer",
+      "name": "virglrenderer",
+      "url": "https://github.com/Droid-VM/virglrenderer",
+      "requested_revision": "droidvm",
+      "commit": "899a4e179a5793c5aa86bbf0799b0683c6746422",
+      "method": "historical artifact source pin; fetchability checked at future sync"
+    },
+    {
+      "path": "external/libvncserver",
+      "name": "libvncserver",
+      "url": "https://github.com/Droid-VM/libvncserver",
+      "requested_revision": "droidvm",
+      "commit": "082e869d0e6e2441b810fc9877bce1acd30f9393",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/zstd",
+      "name": "zstd",
+      "url": "https://github.com/Droid-VM/zstd",
+      "requested_revision": "droidvm",
+      "commit": "0552a06f6a0b50cdeed444534810741a670d6d46",
+      "method": "ls-remote exact ref"
+    },
+    {
+      "path": "external/llvm-libc",
+      "name": "platform/external/llvm-libc",
+      "url": "https://android.googlesource.com/platform/external/llvm-libc",
+      "requested_revision": "refs/heads/android16-qpr2-release",
+      "commit": "24af38d6527d0ee6d61cea5052c83a01725ac98f",
+      "method": "ls-remote exact ref"
+    }
+  ]
+}
