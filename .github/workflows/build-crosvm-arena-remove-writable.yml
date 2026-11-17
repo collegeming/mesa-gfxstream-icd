@@ -13,7 +13,7 @@ on:
       phase:
         description: 'Resolve lock, dry preflight, or explicitly build NEW fixed baseline; never deploys'
         type: choice
-        options: [resolve, preflight, fixed-baseline, legacy-build]
+        options: [resolve, preflight, bootstrap-check, fixed-baseline, legacy-build]
         default: resolve
         required: true
   push:
@@ -89,6 +89,29 @@ jobs:
           cd "$GITHUB_WORKSPACE/patch-repo/manifests/new-fixed-44129434140"
           sha256sum -c SHA256SUMS
           python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" --lock "$PWD" --selfcheck
+  bootstrap-check:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'bootstrap-check' && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: GerritCodeReview/git-repo
+          ref: 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
+          path: repo-tool
+          persist-credentials: false
+      - name: Shared exact bootstrap only (signature verification enabled; no project sync)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$GITHUB_WORKSPACE/aosp"
+          bash "$GITHUB_WORKSPACE/patch-repo/scripts/init_crosvm_fixed_repo.sh" "$GITHUB_WORKSPACE"
+          test ! -e "$GITHUB_WORKSPACE/aosp/external/crosvm"
+          echo 'BOOTSTRAP_CHECK_PASS: exact tag, peeled SHA, repo signature verification and HEAD; no project sync/build/device'
   fixed-baseline:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'fixed-baseline' && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
     needs: fixed-preflight
@@ -122,16 +145,12 @@ jobs:
         run: |
           set -euo pipefail
           test ! -e "$GITHUB_WORKSPACE/aosp"
-          mkdir "$EVIDENCE" "$GITHUB_WORKSPACE/aosp" "$GITHUB_WORKSPACE/locked-manifest-repo"
+          mkdir "$EVIDENCE" "$GITHUB_WORKSPACE/aosp"
           cp "$LOCK/"* "$EVIDENCE/"
           (cd "$LOCK" && sha256sum -c SHA256SUMS)
           test "$(git -C "$GITHUB_WORKSPACE/compat-repo" rev-parse HEAD)" = 3c20ef7b333755e488f92946249ae92660385f35
           test "$(git -C "$GITHUB_WORKSPACE/repo-tool" rev-parse HEAD)" = 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
           sha256sum "$GITHUB_WORKSPACE/compat-repo/scripts/"{patch_crosvm_arena_remove_writable,fix_gfxstream_gettid,provide_missing_include_bytes,disable_crosvm_host_variant}.py > "$EVIDENCE/compat-helper-SHA256SUMS"
-          cp "$LOCK/resolved-manifest.xml" "$GITHUB_WORKSPACE/locked-manifest-repo/default.xml"
-          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" init -b main
-          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" add default.xml
-          git -C "$GITHUB_WORKSPACE/locked-manifest-repo" -c user.name=crosvm-ci -c user.email=crosvm-ci@users.noreply.github.com commit -m 'Exact verified 97-project lock'
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/lib/jvm /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell
           sudo apt-get clean
           sudo docker image prune -a -f
@@ -143,11 +162,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash "$GITHUB_WORKSPACE/patch-repo/scripts/init_crosvm_fixed_repo.sh" "$GITHUB_WORKSPACE"
+          sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/init_crosvm_fixed_repo.sh" > "$EVIDENCE/bootstrap-helper-SHA256SUMS"
           cd "$GITHUB_WORKSPACE/aosp"
-          python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" init \
-            -u "file://$GITHUB_WORKSPACE/locked-manifest-repo" -b main -m default.xml --depth 1 \
-            --repo-rev=97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
-          test "$(git -C .repo/repo rev-parse HEAD)" = 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
           python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" sync -c -j8 --no-tags --optimized-fetch
           python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" \
             --lock "$LOCK" --tree "$PWD" --evidence "$EVIDENCE/verified-project-heads.json"
