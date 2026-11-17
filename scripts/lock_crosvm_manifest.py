@@ -85,6 +85,10 @@ def lock_manifest(raw, resolve=ls_remote):
                 require(child.tag in {"linkfile", "copyfile"} and not list(child),
                         "unsupported project child: " + str(child.tag))
                 require(set(child.attrib) == ATTRS[child.tag], "invalid file mapping")
+                # Strict subset: no absolute, parent, backslash, drive, or glob mappings.
+                require(all(value and SAFE_NAME.fullmatch(value) and
+                            all(part not in {".", ".."} for part in value.split("/"))
+                            for value in child.attrib.values()), "unsafe file mapping")
             projects.append(node)
         else:
             require(not list(node), "unexpected nested manifest element")
@@ -155,8 +159,27 @@ def selfcheck():
 <project path="external/virglrenderer" name="virglrenderer" remote="droidvm" revision="droidvm"/>
 <project path="build/make" name="platform/build"><linkfile src="a" dest="b"/></project>
 </manifest>'''
+    seed = seed.replace(b'<linkfile src="a" dest="b"/>',
+                        b'<linkfile src="a" dest="b"/><copyfile src="c/file" dest="d/file"/>')
     result, records = lock_manifest(seed, lambda url, ref: "a" * 40)
     assert len(records) == 4 and b'<linkfile src="a" dest="b"' in result
+    assert b'<copyfile src="c/file" dest="d/file"' in result
+    invalid = [seed.replace(b'name="platform/build"', b'name="platform/build" unknown="x"'),
+               seed.replace(b'src="a"', b'src="a" unknown="x"')]
+    for value in (b'', b'../x', b'a/../b', b'/absolute', b'C:/x', b'a\\b', b'a//b', b'./a', b'a/*'):
+        for attr in (b'src', b'dest'):
+            for tag in (b'linkfile', b'copyfile'):
+                mapping = b'<' + tag + b' src="a" dest="b"/>'
+                invalid.append(seed.replace(b'<linkfile src="a" dest="b"/>',
+                                            mapping.replace(attr + b'="' + (b'a' if attr == b'src' else b'b') + b'"',
+                                                            attr + b'="' + value + b'"')))
+    for bad in invalid:
+        try:
+            lock_manifest(bad, lambda url, ref: "a" * 40)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe mapping/unknown attribute accepted")
     assert all(SHA.fullmatch(p.get("revision", "")) for p in ET.fromstring(result).findall("project"))
     assert records[-1]["path"] == "external/llvm-libc"
     for bad in (b"include", b"submanifest", b"extend-project", b"remove-project"):
@@ -189,6 +212,9 @@ def selfcheck():
         run.return_value.stdout = ("b" * 40 + "\trefs/tags/v1\n" +
                                    "c" * 40 + "\trefs/tags/v1^{}\n")
         assert ls_remote(url, "v1") == "c" * 40
+        assert ls_remote(url, "refs/tags/v1") == "c" * 40
+        run.return_value.stdout = "a" * 40 + "\trefs/heads/main\n"
+        assert ls_remote(url, "refs/heads/main") == "a" * 40
         run.side_effect = subprocess.CalledProcessError(2, "git")
         try:
             ls_remote(url, "missing")
@@ -196,6 +222,24 @@ def selfcheck():
             pass
         else:
             raise AssertionError("failed ref accepted")
+        run.side_effect = subprocess.TimeoutExpired("git", 60)
+        try:
+            ls_remote(url, "main")
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise AssertionError("ref timeout swallowed")
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as directory:
+        output = Path(directory) / "unpublished-lock"
+        with patch(__name__ + ".lock_manifest", side_effect=subprocess.TimeoutExpired("git", 60)):
+            try:
+                publish_lock(seed, output)
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                raise AssertionError("lock timeout swallowed")
+        assert not output.exists(), "failed resolution published partial output"
     print("manifest lock selfcheck PASS (no network/build/device)")
 
 
@@ -214,11 +258,16 @@ def main():
     blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
     require(blob == "66d3fc3b2b07cdbed8156af818caa72d5bbe77c4",
             "input differs from reviewed manifest commit/blob")
+    publish_lock(raw, args.output)
+
+
+def publish_lock(raw, output):
     # Complete every resolution before publishing any apparently usable lock file.
+    require(not output.exists(), "output must be a new directory")
     locked, projects = lock_manifest(raw)
-    args.output.mkdir(parents=True)
-    (args.output / "resolved-manifest.xml").write_bytes(locked)
-    (args.output / "input-manifest.xml").write_bytes(raw)
+    output.mkdir(parents=True)
+    (output / "resolved-manifest.xml").write_bytes(locked)
+    (output / "input-manifest.xml").write_bytes(raw)
     info = {
         "baseline_status": "NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION",
         "manifest_repository": "https://github.com/Droid-VM/crosvm-minimal-manifest",
@@ -232,11 +281,11 @@ def main():
         "build_status": "NOT_BUILT", "device_status": "NOT_TESTED",
         "projects": projects,
     }
-    (args.output / "lock-info.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    (output / "lock-info.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     lines = []
-    for file in sorted(args.output.iterdir()):
+    for file in sorted(output.iterdir()):
         lines.append(hashlib.sha256(file.read_bytes()).hexdigest() + "  " + file.name)
-    (args.output / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (output / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in info.items() if k != "projects"}, indent=2))
 
 
