@@ -13,7 +13,7 @@ on:
       phase:
         description: 'Resolve lock, dry preflight, or explicitly build NEW fixed baseline; never deploys'
         type: choice
-        options: [resolve, preflight, bootstrap-check, fixed-baseline, legacy-build]
+        options: [resolve, preflight, bootstrap-check, metadata-preflight, fixed-baseline, legacy-build]
         default: resolve
         required: true
   push:
@@ -24,9 +24,48 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: crosvm-arena-remove-writable
+  group: ${{ inputs.phase == 'metadata-preflight' && 'crosvm-metadata-preflight' || 'crosvm-arena-remove-writable' }}
   cancel-in-progress: false
 jobs:
+  metadata-preflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'metadata-preflight' && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: patch-repo
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: collegeming/crosvm
+          ref: 849e05f12d5c8d4c36af8e15763986d242cd43b5
+          path: source
+          persist-credentials: false
+      - name: Metadata recipe check/apply only; no compiler or runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = 849e05f12d5c8d4c36af8e15763986d242cd43b5
+          test -z "$(git -C source status --porcelain)"
+          mkdir metadata-evidence
+          python3 -I patch-repo/scripts/patch_crosvm_scanout_contract.py source --check | tee metadata-evidence/check.txt
+          test -z "$(git -C source status --porcelain)"
+          python3 -I patch-repo/scripts/patch_crosvm_scanout_contract.py source | tee metadata-evidence/apply.txt
+          diff -u <(grep -E '^[0-9a-f]{64}  ' metadata-evidence/check.txt) <(grep -E '^[0-9a-f]{64}  ' metadata-evidence/apply.txt)
+          git -C source diff --check
+          git -C source diff --name-only | sort > metadata-evidence/affected-files.txt
+          printf '%s\n' devices/src/virtio/gpu/virtio_gpu.rs gpu_display/src/gpu_display_android.rs gpu_display/src/lib.rs | sort > metadata-evidence/expected-files.txt
+          diff -u metadata-evidence/expected-files.txt metadata-evidence/affected-files.txt
+          git -C source diff --binary > metadata-evidence/source.patch
+          sha256sum patch-repo/scripts/patch_crosvm_scanout_contract.py > metadata-evidence/helper-SHA256SUMS
+          (cd metadata-evidence && sha256sum source.patch check.txt apply.txt affected-files.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
+          echo 'METADATA_PREFLIGHT_PASS: exact blobs, preserved operation counts, check/apply SHA and exactly 3 files; NOT_COMPILED NOT_DEVICE_TESTED'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosvm-metadata-preflight-${{ github.run_id }}
+          path: metadata-evidence/
+          if-no-files-found: error
   resolve-manifest:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'resolve'
     runs-on: ubuntu-24.04
