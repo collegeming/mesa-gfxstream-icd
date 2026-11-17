@@ -146,7 +146,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/aosp"
           python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" init \
             -u "file://$GITHUB_WORKSPACE/locked-manifest-repo" -b main -m default.xml --depth 1 \
-            --repo-rev=v2.54
+            --repo-rev=97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
           test "$(git -C .repo/repo rev-parse HEAD)" = 97dc5c1bd9527c2abe2183b16a4b7ef037dc34a7
           python3 -I "$GITHUB_WORKSPACE/repo-tool/repo" sync -c -j8 --no-tags --optimized-fetch
           python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/check_crosvm_fixed_build.py" \
