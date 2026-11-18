@@ -21,6 +21,11 @@ on:
         type: boolean
         default: false
         required: false
+      fix_bridge_saved_frame:
+        description: 'With fixed-metadata: also apply the reviewed bridge saved-frame auto redraw fix (packages/modules/Virtualization)'
+        type: boolean
+        default: false
+        required: false
   push:
     branches: [fix/crosvm-arena-remove-writable]
     paths:
@@ -164,6 +169,8 @@ jobs:
     timeout-minutes: 360
     env:
       BUILD_VARIANT: ${{ inputs.phase == 'fixed-metadata' && (inputs.fix_fourcc && 'metadata-fix' || 'metadata') || 'baseline' }}
+      FIX_FOURCC_INPUT: ${{ inputs.fix_fourcc }}
+      FIX_BRIDGE_SAVED_FRAME_INPUT: ${{ inputs.fix_bridge_saved_frame }}
       CARGO_BUILD_JOBS: '2'
       LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
       EVIDENCE: ${{ github.workspace }}/fixed-evidence
@@ -267,6 +274,20 @@ jobs:
           test -s "$EVIDENCE/fix-fourcc.patch"
           git -C external/crosvm diff --binary > "$EVIDENCE/source.patch"
           printf '%s\n' 'BEHAVIOR_CHANGE=single_variable: cached query fourcc==0 is treated as no answer and falls back to the existing scanout_data fourcc' 'unchanged: sink_fourcc/alpha/transfer path/renderer calls; metadata logs retained' 'NOT_DEVICE_TESTED' > "$EVIDENCE/fix-fourcc-coverage.txt"
+      - name: Optional single-variable fix; bridge redraws the saved frame on reconnect
+        if: inputs.phase == 'fixed-metadata' && inputs.fix_bridge_saved_frame
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          printf '%s  %s\n' 8a860197386cd66b64434c6fc97325607b7c76341f11d496ee061ebdf237cb99 "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_autodraw.py" | sha256sum -c -
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_autodraw.py" packages/modules/Virtualization --check | tee "$EVIDENCE/fix-bridge-check.txt"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_autodraw.py" packages/modules/Virtualization | tee "$EVIDENCE/fix-bridge-apply.txt"
+          diff -u <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-check.txt") <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-apply.txt")
+          git -C packages/modules/Virtualization diff --check
+          git -C packages/modules/Virtualization diff --binary -- libs/android_display_backend/crosvm_android_display_client.cpp > "$EVIDENCE/fix-bridge-saved-frame.patch"
+          test -s "$EVIDENCE/fix-bridge-saved-frame.patch"
+          printf '%s\n' 'BEHAVIOR_CHANGE=single_variable: removeSurface saves the last presented frame inline (same copy saveFrame performs) and setNativeSurface redraws the saved frame right after attach' 'unchanged: AIDL saveFrameForSurface/drawSavedFrameForSurface still work and stay idempotent; no new buffer/format/fence/geometry logic; save failure is logged and removal continues; draw failure is logged and attach still succeeds' 'patched repo: packages/modules/Virtualization @ 862c6af544ce4ca89e5dc8f1aca10a832367d77f; source.patch covers external/crosvm only, the bridge diff is this patch file' 'NOT_DEVICE_TESTED' > "$EVIDENCE/fix-bridge-coverage.txt"
       - name: Build current exact device-only module; any m failure stops admission
         shell: bash
         run: |
@@ -307,6 +328,7 @@ jobs:
           {
             echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
             printf 'variant=%s\n' "$BUILD_VARIANT"
+            printf 'inputs: fix_fourcc=%s fix_bridge_saved_frame=%s\n' "$FIX_FOURCC_INPUT" "$FIX_BRIDGE_SAVED_FRAME_INPUT"
             echo 'baseline_ci_source=d290a8250a71ffa0e858737098ccbf03caf3180a; same 97-project lock and historical compatibility helpers'
             if [ "$BUILD_VARIANT" != baseline ]; then
               cat "$EVIDENCE/metadata-coverage.txt" "$EVIDENCE/metadata-helper-SHA256SUMS"
@@ -314,6 +336,11 @@ jobs:
               if [ -f "$EVIDENCE/fix-fourcc.patch" ]; then
                 cat "$EVIDENCE/fix-fourcc-coverage.txt"
                 sha256sum "$EVIDENCE/fix-fourcc.patch" "$EVIDENCE/fix-fourcc-check.txt" "$EVIDENCE/fix-fourcc-apply.txt"
+              fi
+              if [ -f "$EVIDENCE/fix-bridge-saved-frame.patch" ]; then
+                cat "$EVIDENCE/fix-bridge-coverage.txt"
+                sha256sum "$EVIDENCE/fix-bridge-saved-frame.patch" "$EVIDENCE/fix-bridge-check.txt" "$EVIDENCE/fix-bridge-apply.txt"
+                sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_autodraw.py"
               fi
             fi
             echo 'NOT_DEVICE_TESTED; no deployment; Gunyah placeholders not exercised (KVM only)'
@@ -333,6 +360,9 @@ jobs:
           fi
           if [ "$BUILD_VARIANT" = metadata-fix ]; then
             (cd "$EVIDENCE" && sha256sum fix-fourcc.patch fix-fourcc-coverage.txt fix-fourcc-check.txt fix-fourcc-apply.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
+          fi
+          if [ -f "$EVIDENCE/fix-bridge-saved-frame.patch" ]; then
+            (cd "$EVIDENCE" && sha256sum fix-bridge-saved-frame.patch fix-bridge-coverage.txt fix-bridge-check.txt fix-bridge-apply.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
           fi
       - name: Upload successful fixed variant only
         uses: actions/upload-artifact@v4
