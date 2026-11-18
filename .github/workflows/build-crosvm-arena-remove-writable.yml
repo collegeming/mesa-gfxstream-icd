@@ -16,6 +16,11 @@ on:
         options: [resolve, preflight, bootstrap-check, metadata-preflight, fixed-baseline, fixed-metadata, legacy-build]
         default: resolve
         required: true
+      fix_fourcc:
+        description: 'With fixed-metadata: also apply the reviewed zero-fourcc fallback fix'
+        type: boolean
+        default: false
+        required: false
   push:
     branches: [fix/crosvm-arena-remove-writable]
     paths:
@@ -152,13 +157,13 @@ jobs:
           test ! -e "$GITHUB_WORKSPACE/aosp/external/crosvm"
           echo 'BOOTSTRAP_CHECK_PASS: exact tag, peeled SHA, repo signature verification and HEAD; no project sync/build/device'
   fixed-baseline:
-    name: fixed-${{ inputs.phase == 'fixed-metadata' && 'metadata' || 'baseline' }}
+    name: fixed-${{ inputs.phase == 'fixed-metadata' && (inputs.fix_fourcc && 'metadata-fix' || 'metadata') || 'baseline' }}
     if: github.event_name == 'workflow_dispatch' && (inputs.phase == 'fixed-baseline' || inputs.phase == 'fixed-metadata') && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
     needs: fixed-preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
-      BUILD_VARIANT: ${{ inputs.phase == 'fixed-metadata' && 'metadata' || 'baseline' }}
+      BUILD_VARIANT: ${{ inputs.phase == 'fixed-metadata' && (inputs.fix_fourcc && 'metadata-fix' || 'metadata') || 'baseline' }}
       CARGO_BUILD_JOBS: '2'
       LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
       EVIDENCE: ${{ github.workspace }}/fixed-evidence
@@ -247,6 +252,21 @@ jobs:
           sha256sum "$EVIDENCE/source.patch" "$EVIDENCE/gfxstream-gettid.patch" "$EVIDENCE/metadata-only.patch" "$EVIDENCE/baseline-source.patch" > "$EVIDENCE/patch-SHA256SUMS"
           sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_scanout_contract.py" > "$EVIDENCE/metadata-helper-SHA256SUMS"
           printf '%s\n' 'DIAGNOSTIC_ONLY; coverage=transfer_read_direct,transfer_read_staging; NOT import/pool/mmap' 'query_status=cached_info_3d_NOT_live_export; resource_format=creation_enum_or_unknown_blob_restore' 'raw ANB metadata only; no pixel/fourcc/alpha behavior change; global events<=16; NOT_DEVICE_TESTED' > "$EVIDENCE/metadata-coverage.txt"
+      - name: Optional single-variable fix; zero fourcc falls back to scanout format
+        if: inputs.phase == 'fixed-metadata' && inputs.fix_fourcc
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aosp"
+          printf '%s  %s\n' 98537085dedc01d20bd06f11c74f4b3872441b72d6e4ee56cc61e5c2bffdb49c "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_fourcc_zero_fallback.py" | sha256sum -c -
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_fourcc_zero_fallback.py" external/crosvm --check | tee "$EVIDENCE/fix-fourcc-check.txt"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_fourcc_zero_fallback.py" external/crosvm | tee "$EVIDENCE/fix-fourcc-apply.txt"
+          diff -u <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-fourcc-check.txt") <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-fourcc-apply.txt")
+          git -C external/crosvm diff --check
+          git -C external/crosvm diff --binary -- devices/src/virtio/gpu/virtio_gpu.rs > "$EVIDENCE/fix-fourcc.patch"
+          test -s "$EVIDENCE/fix-fourcc.patch"
+          git -C external/crosvm diff --binary > "$EVIDENCE/source.patch"
+          printf '%s\n' 'BEHAVIOR_CHANGE=single_variable: cached query fourcc==0 is treated as no answer and falls back to the existing scanout_data fourcc' 'unchanged: sink_fourcc/alpha/transfer path/renderer calls; metadata logs retained' 'NOT_DEVICE_TESTED' > "$EVIDENCE/fix-fourcc-coverage.txt"
       - name: Build current exact device-only module; any m failure stops admission
         shell: bash
         run: |
@@ -288,9 +308,13 @@ jobs:
             echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
             printf 'variant=%s\n' "$BUILD_VARIANT"
             echo 'baseline_ci_source=d290a8250a71ffa0e858737098ccbf03caf3180a; same 97-project lock and historical compatibility helpers'
-            if [ "$BUILD_VARIANT" = metadata ]; then
+            if [ "$BUILD_VARIANT" != baseline ]; then
               cat "$EVIDENCE/metadata-coverage.txt" "$EVIDENCE/metadata-helper-SHA256SUMS"
               sha256sum "$EVIDENCE/metadata-only.patch" "$EVIDENCE/baseline-source.patch"
+              if [ -f "$EVIDENCE/fix-fourcc.patch" ]; then
+                cat "$EVIDENCE/fix-fourcc-coverage.txt"
+                sha256sum "$EVIDENCE/fix-fourcc.patch" "$EVIDENCE/fix-fourcc-check.txt" "$EVIDENCE/fix-fourcc-apply.txt"
+              fi
             fi
             echo 'NOT_DEVICE_TESTED; no deployment; Gunyah placeholders not exercised (KVM only)'
             printf 'exact_output=%s\n' "$EXACT_OUTPUT"
@@ -304,8 +328,11 @@ jobs:
             cat "$EVIDENCE/compiler-versions.txt" "$EVIDENCE/compat-helper-SHA256SUMS" "$EVIDENCE/include-bytes-placeholders.txt"
           } > "$EVIDENCE/BUILD-INFO.txt"
           (cd "$EVIDENCE" && sha256sum crosvm source.patch gfxstream-gettid.patch resolved-manifest.xml input-manifest.xml lock-info.json synced-resolved-manifest.xml verified-project-heads.json output-admission.json compiler-versions.txt device-only-link-commands.txt rust-toolchain-config.go clang-toolchain-config.go compat-helper-SHA256SUMS patch-SHA256SUMS include-bytes-placeholders.txt soong-crosvm.log crosvm-elf.txt BUILD-INFO.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
-          if [ "$BUILD_VARIANT" = metadata ]; then
+          if [ "$BUILD_VARIANT" != baseline ]; then
             (cd "$EVIDENCE" && sha256sum metadata-only.patch baseline-source.patch metadata-helper-SHA256SUMS metadata-coverage.txt metadata-check.txt metadata-apply.txt metadata-affected-files.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
+          fi
+          if [ "$BUILD_VARIANT" = metadata-fix ]; then
+            (cd "$EVIDENCE" && sha256sum fix-fourcc.patch fix-fourcc-coverage.txt fix-fourcc-check.txt fix-fourcc-apply.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
           fi
       - name: Upload successful fixed variant only
         uses: actions/upload-artifact@v4
