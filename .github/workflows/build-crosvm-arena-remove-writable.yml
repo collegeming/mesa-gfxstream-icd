@@ -271,12 +271,17 @@ jobs:
           cp "$EXACT_OUTPUT" "$EVIDENCE/crosvm"
           cp build/soong/rust/config/global.go "$EVIDENCE/rust-toolchain-config.go"
           cp build/soong/cc/config/global.go "$EVIDENCE/clang-toolchain-config.go"
-          # Record every available compiler version, not a guessed active compiler.
+          # Record toolchain identities without executing prebuilt compilers:
+          # prebuilt clang.real requires libtinfo.so.5, absent on ubuntu-24.04 outside envsetup.
           for compiler in prebuilts/rust/linux-x86/*/bin/rustc prebuilts/clang/host/linux-x86/clang-*/bin/clang; do
             if [ -x "$compiler" ]; then
               printf '\n%s\n' "$compiler"
-              "$compiler" --version
               sha256sum "$compiler"
+              dir=$(dirname "$(dirname "$compiler")")
+              for vf in "$dir/AndroidVersion.txt" "$dir/version.txt"; do
+                if [ -f "$vf" ]; then printf '%s: ' "$vf"; cat "$vf"; fi
+              done
+              if [ -f "$(dirname "$compiler")/clang.real" ]; then sha256sum "$(dirname "$compiler")/clang.real"; fi
             fi
           done > "$EVIDENCE/compiler-versions.txt"
           {
