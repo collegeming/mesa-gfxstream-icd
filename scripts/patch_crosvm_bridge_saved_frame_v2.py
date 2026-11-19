@@ -97,19 +97,14 @@ NEW_ATTACH = """        mNativeSurfaceReady.notify_one();
         // Hand the repaint to a detached loop that first waits out the attach window and
         // then retries with backoff; it stops after one successful draw, when no frame
         // was saved, or when a newer attach/remove bumped the surface generation.
+        // Built with -fno-exceptions: a std::thread construction failure aborts (libc++
+        // replaces the throw), so there is no catchable failure to handle here.
         {
             std::lock_guard lk(mSurfaceMutex);
             if (mSavedFrameValid && mNativeSurface != nullptr) {
-                const uint64_t generation = mNativeSurfaceGeneration;
-                try {
-                    std::thread(&AndroidDisplaySurface::savedFrameRedrawLoop, this,
-                                generation)
-                            .detach();
-                } catch (const std::system_error& e) {
-                    LOG(WARNING) << "display surface " << mName
-                                 << " could not start deferred saved-frame redraw: "
-                                 << e.what();
-                }
+                std::thread(&AndroidDisplaySurface::savedFrameRedrawLoop, this,
+                            mNativeSurfaceGeneration)
+                        .detach();
             }
         }
         return {};
