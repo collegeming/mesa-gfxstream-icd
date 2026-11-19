@@ -26,6 +26,11 @@ on:
         type: boolean
         default: false
         required: false
+      fix_bridge_saved_frame_v2:
+        description: 'With fixed-metadata: apply the v2 deferred-retry bridge saved-frame redraw (supersedes the v1 inline draw; mutually exclusive with fix_bridge_saved_frame)'
+        type: boolean
+        default: false
+        required: false
   push:
     branches: [fix/crosvm-arena-remove-writable]
     paths:
@@ -171,6 +176,7 @@ jobs:
       BUILD_VARIANT: ${{ inputs.phase == 'fixed-metadata' && (inputs.fix_fourcc && 'metadata-fix' || 'metadata') || 'baseline' }}
       FIX_FOURCC_INPUT: ${{ inputs.fix_fourcc }}
       FIX_BRIDGE_SAVED_FRAME_INPUT: ${{ inputs.fix_bridge_saved_frame }}
+      FIX_BRIDGE_SAVED_FRAME_V2_INPUT: ${{ inputs.fix_bridge_saved_frame_v2 }}
       CARGO_BUILD_JOBS: '2'
       LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
       EVIDENCE: ${{ github.workspace }}/fixed-evidence
@@ -288,6 +294,24 @@ jobs:
           git -C packages/modules/Virtualization diff --binary -- libs/android_display_backend/crosvm_android_display_client.cpp > "$EVIDENCE/fix-bridge-saved-frame.patch"
           test -s "$EVIDENCE/fix-bridge-saved-frame.patch"
           printf '%s\n' 'BEHAVIOR_CHANGE=single_variable: removeSurface saves the last presented frame inline (same copy saveFrame performs) and setNativeSurface redraws the saved frame right after attach' 'unchanged: AIDL saveFrameForSurface/drawSavedFrameForSurface still work and stay idempotent; no new buffer/format/fence/geometry logic; save failure is logged and removal continues; draw failure is logged and attach still succeeds' 'patched repo: packages/modules/Virtualization @ 862c6af544ce4ca89e5dc8f1aca10a832367d77f; source.patch covers external/crosvm only, the bridge diff is this patch file' 'NOT_DEVICE_TESTED' > "$EVIDENCE/fix-bridge-coverage.txt"
+      - name: Optional single-variable fix; v2 bridge redraws the saved frame after a deferred retry
+        if: inputs.phase == 'fixed-metadata' && inputs.fix_bridge_saved_frame_v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.fix_bridge_saved_frame }}" = "true" ]; then
+            echo 'fix_bridge_saved_frame (v1) and fix_bridge_saved_frame_v2 transform the same file from the same pinned tree; dispatch v2 alone' >&2
+            exit 1
+          fi
+          cd "$GITHUB_WORKSPACE/aosp"
+          printf '%s  %s\n' 44b4dd8e31374acbd407b8b7cd6e7929f95fd419ccb68e9038b3fce4d13e9989 "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" | sha256sum -c -
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" packages/modules/Virtualization --check | tee "$EVIDENCE/fix-bridge-v2-check.txt"
+          python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" packages/modules/Virtualization | tee "$EVIDENCE/fix-bridge-v2-apply.txt"
+          diff -u <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-v2-check.txt") <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-v2-apply.txt")
+          git -C packages/modules/Virtualization diff --check
+          git -C packages/modules/Virtualization diff --binary -- libs/android_display_backend/crosvm_android_display_client.cpp > "$EVIDENCE/fix-bridge-saved-frame-v2.patch"
+          test -s "$EVIDENCE/fix-bridge-saved-frame-v2.patch"
+          printf '%s\n' 'BEHAVIOR_CHANGE=single_variable: removeSurface keeps the round-1 inline save and records the frame geometry; setNativeSurface spawns a detached loop that waits 400ms and then redraws the saved frame with 100/300/700ms backoff, at most 4 attempts (~1.5s), instead of drawing inline in the binder call; both ANativeWindow_lock failure sites now log the native status' 'round1_regression: the inline draw raced the app-side buffer queue setup (run 44384405422: the saved frame painted on attach but every live flip then failed with "Failed to lock window")' 'unchanged: AIDL saveFrameForSurface/drawSavedFrameForSurface still work and stay idempotent; no new buffer/format/fence/geometry logic; thread spawn failure is logged and attach still succeeds; a stale-geometry draw is refused because drawSavedFrame leaks its dequeued buffer on copy mismatch' 'patched repo: packages/modules/Virtualization @ 862c6af544ce4ca89e5dc8f1aca10a832367d77f; source.patch covers external/crosvm only, the bridge diff is this patch file' 'NOT_DEVICE_TESTED' > "$EVIDENCE/fix-bridge-v2-coverage.txt"
       - name: Build current exact device-only module; any m failure stops admission
         shell: bash
         run: |
@@ -328,7 +352,7 @@ jobs:
           {
             echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
             printf 'variant=%s\n' "$BUILD_VARIANT"
-            printf 'inputs: fix_fourcc=%s fix_bridge_saved_frame=%s\n' "$FIX_FOURCC_INPUT" "$FIX_BRIDGE_SAVED_FRAME_INPUT"
+            printf 'inputs: fix_fourcc=%s fix_bridge_saved_frame=%s fix_bridge_saved_frame_v2=%s\n' "$FIX_FOURCC_INPUT" "$FIX_BRIDGE_SAVED_FRAME_INPUT" "$FIX_BRIDGE_SAVED_FRAME_V2_INPUT"
             echo 'baseline_ci_source=d290a8250a71ffa0e858737098ccbf03caf3180a; same 97-project lock and historical compatibility helpers'
             if [ "$BUILD_VARIANT" != baseline ]; then
               cat "$EVIDENCE/metadata-coverage.txt" "$EVIDENCE/metadata-helper-SHA256SUMS"
@@ -341,6 +365,11 @@ jobs:
                 cat "$EVIDENCE/fix-bridge-coverage.txt"
                 sha256sum "$EVIDENCE/fix-bridge-saved-frame.patch" "$EVIDENCE/fix-bridge-check.txt" "$EVIDENCE/fix-bridge-apply.txt"
                 sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_autodraw.py"
+              fi
+              if [ -f "$EVIDENCE/fix-bridge-saved-frame-v2.patch" ]; then
+                cat "$EVIDENCE/fix-bridge-v2-coverage.txt"
+                sha256sum "$EVIDENCE/fix-bridge-saved-frame-v2.patch" "$EVIDENCE/fix-bridge-v2-check.txt" "$EVIDENCE/fix-bridge-v2-apply.txt"
+                sha256sum "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py"
               fi
             fi
             echo 'NOT_DEVICE_TESTED; no deployment; Gunyah placeholders not exercised (KVM only)'
@@ -363,6 +392,9 @@ jobs:
           fi
           if [ -f "$EVIDENCE/fix-bridge-saved-frame.patch" ]; then
             (cd "$EVIDENCE" && sha256sum fix-bridge-saved-frame.patch fix-bridge-coverage.txt fix-bridge-check.txt fix-bridge-apply.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
+          fi
+          if [ -f "$EVIDENCE/fix-bridge-saved-frame-v2.patch" ]; then
+            (cd "$EVIDENCE" && sha256sum fix-bridge-saved-frame-v2.patch fix-bridge-v2-coverage.txt fix-bridge-v2-check.txt fix-bridge-v2-apply.txt >> SHA256SUMS && sha256sum -c SHA256SUMS)
           fi
       - name: Upload successful fixed variant only
         uses: actions/upload-artifact@v4
