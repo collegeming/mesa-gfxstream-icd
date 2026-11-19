@@ -304,7 +304,7 @@ jobs:
             exit 1
           fi
           cd "$GITHUB_WORKSPACE/aosp"
-          printf '%s  %s\n' 44b4dd8e31374acbd407b8b7cd6e7929f95fd419ccb68e9038b3fce4d13e9989 "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" | sha256sum -c -
+          printf '%s  %s\n' 898001f1119a6d04c930e69c0e94241590ff50ef08aaf0726a8873e9f30505b8 "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" | sha256sum -c -
           python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" packages/modules/Virtualization --check | tee "$EVIDENCE/fix-bridge-v2-check.txt"
           python3 -I "$GITHUB_WORKSPACE/patch-repo/scripts/patch_crosvm_bridge_saved_frame_v2.py" packages/modules/Virtualization | tee "$EVIDENCE/fix-bridge-v2-apply.txt"
           diff -u <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-v2-check.txt") <(grep -E '^[0-9a-f]{64}  ' "$EVIDENCE/fix-bridge-v2-apply.txt")
