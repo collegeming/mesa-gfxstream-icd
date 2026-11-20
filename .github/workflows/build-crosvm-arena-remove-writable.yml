@@ -433,13 +433,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      PANVK_PINNED: 98939d12323af45fc68868f8ba9a99cec04d99f2
+      PANVK_PINNED: c411ef34ee47e875ca772c4f3af1133f07f969e2
     steps:
       - name: Checkout panvk CI at pinned commit
         uses: actions/checkout@v4
         with:
           repository: collegeming/panvk-mali-nctx-ci
-          ref: 98939d12323af45fc68868f8ba9a99cec04d99f2
+          ref: c411ef34ee47e875ca772c4f3af1133f07f969e2
           path: panvk-ci
           persist-credentials: false
       - name: Install build tools
