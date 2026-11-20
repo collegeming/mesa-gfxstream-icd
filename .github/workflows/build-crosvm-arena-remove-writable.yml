@@ -31,6 +31,11 @@ on:
         type: boolean
         default: false
         required: false
+      fix_kbase_evt:
+        description: 'Also build the host-side libvirglrenderer (Mali kbase renderer) with the group-error decode + shadow-BO live-mapping patches in this same run; never deploys'
+        type: boolean
+        default: false
+        required: false
   push:
     branches: [fix/crosvm-arena-remove-writable]
     paths:
@@ -177,6 +182,7 @@ jobs:
       FIX_FOURCC_INPUT: ${{ inputs.fix_fourcc }}
       FIX_BRIDGE_SAVED_FRAME_INPUT: ${{ inputs.fix_bridge_saved_frame }}
       FIX_BRIDGE_SAVED_FRAME_V2_INPUT: ${{ inputs.fix_bridge_saved_frame_v2 }}
+      FIX_KBASE_EVT_INPUT: ${{ inputs.fix_kbase_evt }}
       CARGO_BUILD_JOBS: '2'
       LOCK: ${{ github.workspace }}/patch-repo/manifests/new-fixed-44129434140
       EVIDENCE: ${{ github.workspace }}/fixed-evidence
@@ -352,7 +358,7 @@ jobs:
           {
             echo 'NEW_FIXED_BASELINE_NOT_DEPLOYED_REPRODUCTION'
             printf 'variant=%s\n' "$BUILD_VARIANT"
-            printf 'inputs: fix_fourcc=%s fix_bridge_saved_frame=%s fix_bridge_saved_frame_v2=%s\n' "$FIX_FOURCC_INPUT" "$FIX_BRIDGE_SAVED_FRAME_INPUT" "$FIX_BRIDGE_SAVED_FRAME_V2_INPUT"
+            printf 'inputs: fix_fourcc=%s fix_bridge_saved_frame=%s fix_bridge_saved_frame_v2=%s fix_kbase_evt=%s\n' "$FIX_FOURCC_INPUT" "$FIX_BRIDGE_SAVED_FRAME_INPUT" "$FIX_BRIDGE_SAVED_FRAME_V2_INPUT" "$FIX_KBASE_EVT_INPUT"
             echo 'baseline_ci_source=d290a8250a71ffa0e858737098ccbf03caf3180a; same 97-project lock and historical compatibility helpers'
             if [ "$BUILD_VARIANT" != baseline ]; then
               cat "$EVIDENCE/metadata-coverage.txt" "$EVIDENCE/metadata-helper-SHA256SUMS"
@@ -414,6 +420,51 @@ jobs:
             fixed-evidence/*.patch
             fixed-evidence/*SHA256SUMS
           if-no-files-found: warn
+  # Host-side libvirglrenderer (Mali kbase renderer) with the fix_kbase_evt patches:
+  # A1 decode the CS group-error notification op3 used to drop with -EIO;
+  # A2 route shadow-BO copy accesses (cmd2/cmd3) through the live kbase
+  # mapping instead of the stale memfd copy.  Built from the pinned panvk
+  # CI commit in the same run as the fixed crosvm so the deployed pair
+  # stays a matched set.
+  host-libvirglrenderer:
+    name: host-libvirglrenderer-kbase-evt
+    if: github.event_name == 'workflow_dispatch' && inputs.fix_kbase_evt && github.ref == 'refs/heads/diagnostic/scanout-contract-pinned-recipe'
+    needs: fixed-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PANVK_PINNED: 98939d12323af45fc68868f8ba9a99cec04d99f2
+    steps:
+      - name: Checkout panvk CI at pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: collegeming/panvk-mali-nctx-ci
+          ref: 98939d12323af45fc68868f8ba9a99cec04d99f2
+          path: panvk-ci
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y meson ninja-build pkg-config
+      - name: Build host libvirglrenderer with NDK (FIX_KBASE_EVT=1)
+        env:
+          FIX_KBASE_EVT: '1'
+        run: |
+          set -euo pipefail
+          test "$(git -C panvk-ci rev-parse HEAD)" = "$PANVK_PINNED"
+          bash panvk-ci/scripts/host-ndk/build-host-ndk.sh
+          test -f out/libvirglrenderer.so
+          test -s out/fix-kbase-evt.patch
+          cat out/BUILD-INFO.txt
+          cat out/SHA256SUMS
+          (cd out && sha256sum -c SHA256SUMS)
+      - name: Upload host libvirglrenderer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvirglrenderer-mali-ndk-fixed-${{ github.run_id }}
+          path: out/
+          if-no-files-found: error
   # Same source lineage as the deployed runtime: Droid-VM/crosvm via the minimal manifest, built
   # with soong against the Android arm64 target (the binary the DroidVM app execs).
   android-soong:
